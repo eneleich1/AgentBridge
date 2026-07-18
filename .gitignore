@@ -1,0 +1,28 @@
+# Dependencies and build output
+node_modules/
+web/node_modules/
+web/dist/
+coverage/
+
+# Local runtime state
+data/config/
+data/uploads/
+data/*.sqlite
+data/*.sqlite-*
+data/logs/*
+!data/logs/.gitkeep
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+server/config/*.json
+!server/config/*.example.json
+
+# Logs and editor files
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+

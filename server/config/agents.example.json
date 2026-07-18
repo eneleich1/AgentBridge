@@ -1,0 +1,22 @@
+{
+  "agents": [
+    {
+      "id": "cursor",
+      "name": "Cursor Agent",
+      "description": "Cursor Agent CLI",
+      "enabled": true,
+      "settings": {}
+    },
+    {
+      "id": "codex",
+      "name": "Codex CLI",
+      "description": "OpenAI Codex CLI",
+      "enabled": true,
+      "settings": {
+        "model": "gpt-5.4"
+      }
+    }
+  ],
+  "maxConcurrency": 1,
+  "accessToken": ""
+}
