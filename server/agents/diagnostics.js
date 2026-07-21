@@ -1,6 +1,13 @@
 const { runProcess } = require("./runProcess");
+const {
+  refreshProcessPath,
+  resolveCursorAgentCommand,
+  resolveCodexCommand,
+  quoteForCmd,
+} = require("./cliPath");
 
 async function runCmd(commandLine, timeoutMs = 15000) {
+  refreshProcessPath();
   try {
     const result = await runProcess(
       "cmd.exe",
@@ -74,8 +81,19 @@ function isAccessDenied(text) {
   );
 }
 
+function isMissingCommand(text) {
+  const lower = String(text || "").toLowerCase();
+  return (
+    lower.includes("not recognized") ||
+    lower.includes("not found") ||
+    lower.includes("is not recognized as an internal or external command")
+  );
+}
+
 async function diagnoseCursor() {
-  const version = await runCmd("agent --version");
+  const agentCommand = resolveCursorAgentCommand();
+  const agent = quoteForCmd(agentCommand);
+  const version = await runCmd(`${agent} --version`);
   if (!version.ok && needsCursorLogin(version.stderr + version.stdout)) {
     return {
       installed: true,
@@ -83,25 +101,22 @@ async function diagnoseCursor() {
       authenticated: false,
       status: "needs_login",
       message: "Cursor Agent CLI found but not authenticated.",
+      commandPath: agentCommand,
     };
   }
 
-  if (
-    !version.ok &&
-    (version.stderr.includes("not recognized") ||
-      version.stderr.includes("not found") ||
-      version.stdout.includes("not recognized"))
-  ) {
+  if (!version.ok && isMissingCommand(`${version.stderr} ${version.stdout}`)) {
     return {
       installed: false,
       version: null,
       authenticated: false,
       status: "missing",
       message: "Cursor Agent CLI (agent) not found on PATH.",
+      commandPath: agentCommand,
     };
   }
 
-  const status = await runCmd("agent status");
+  const status = await runCmd(`${agent} status`);
   const authText = `${status.stdout} ${status.stderr}`;
   if (status.timedOut) {
     return {
@@ -110,41 +125,41 @@ async function diagnoseCursor() {
       authenticated: false,
       status: "blocked",
       message: "Cursor Agent CLI did not answer in time. Check authentication and local CLI health.",
-    };
-  }
-  if (needsCursorLogin(authText)) {
-    return {
-      installed: true,
-      version: version.stdout || version.stderr || null,
-      authenticated: false,
-      status: "needs_login",
-      message: "Run 'agent login' on the desktop or set CURSOR_API_KEY.",
+      commandPath: agentCommand,
     };
   }
 
-  if (status.ok || status.stdout.length > 0) {
-    return {
-      installed: true,
-      version: version.stdout || version.stderr || null,
-      authenticated: true,
-      status: "ready",
-      message: "Cursor Agent CLI is ready.",
-    };
+  const loggedIn = /logged in as\b/i.test(authText);
+  if (!loggedIn || needsCursorLogin(authText)) {
+    const about = await runCmd(`${agent} about`);
+    const aboutText = `${about.stdout} ${about.stderr}`;
+    const aboutEmail = /user email\s+\S+@\S+/i.test(aboutText);
+    if (!aboutEmail || needsCursorLogin(aboutText)) {
+      return {
+        installed: true,
+        version: version.stdout || version.stderr || null,
+        authenticated: false,
+        status: "needs_login",
+        message: "Run 'agent login' on the desktop or set CURSOR_API_KEY.",
+        commandPath: agentCommand,
+      };
+    }
   }
 
   return {
     installed: true,
     version: version.stdout || version.stderr || null,
-    authenticated: !needsCursorLogin(authText),
-    status: needsCursorLogin(authText) ? "needs_login" : "ready",
-    message: needsCursorLogin(authText)
-      ? "Run 'agent login' on the desktop or set CURSOR_API_KEY."
-      : "Cursor Agent CLI detected.",
+    authenticated: true,
+    status: "ready",
+    message: "Cursor Agent CLI is ready.",
+    commandPath: agentCommand,
   };
 }
 
 async function diagnoseCodex() {
-  const version = await runCmd("codex --version");
+  const codexCommand = resolveCodexCommand();
+  const codex = quoteForCmd(codexCommand);
+  const version = await runCmd(`${codex} --version`);
   const versionText = `${version.stdout} ${version.stderr}`;
 
   if (isAccessDenied(versionText)) {
@@ -154,19 +169,18 @@ async function diagnoseCodex() {
       authenticated: false,
       status: "blocked",
       message: "Codex CLI is installed but Windows blocked execution.",
+      commandPath: codexCommand,
     };
   }
 
-  if (
-    !version.ok &&
-    (versionText.includes("not recognized") || versionText.includes("not found"))
-  ) {
+  if (!version.ok && isMissingCommand(versionText)) {
     return {
       installed: false,
       version: null,
       authenticated: false,
       status: "missing",
       message: "Codex CLI (codex) not found on PATH.",
+      commandPath: codexCommand,
     };
   }
 
@@ -177,10 +191,11 @@ async function diagnoseCodex() {
       authenticated: false,
       status: "usage_limit",
       message: "Codex usage limit reached.",
+      commandPath: codexCommand,
     };
   }
 
-  const login = await runCmd("codex login status");
+  const login = await runCmd(`${codex} login status`);
   const loginText = `${login.stdout} ${login.stderr}`;
 
   if (needsCodexLogin(loginText)) {
@@ -190,10 +205,11 @@ async function diagnoseCodex() {
       authenticated: false,
       status: "needs_login",
       message: "Run 'codex login' or 'codex login --device-auth' on the backend machine.",
+      commandPath: codexCommand,
     };
   }
 
-  const help = await runCmd("codex exec --help");
+  const help = await runCmd(`${codex} exec --help`);
   const helpText = `${help.stdout} ${help.stderr}`;
 
   if (help.timedOut) {
@@ -203,6 +219,7 @@ async function diagnoseCodex() {
       authenticated: false,
       status: "blocked",
       message: "Codex CLI did not answer in time. Check the desktop CLI installation and auth state.",
+      commandPath: codexCommand,
     };
   }
 
@@ -213,6 +230,7 @@ async function diagnoseCodex() {
       authenticated: false,
       status: "blocked",
       message: "Codex CLI is installed but cannot be executed by AgentBridge.",
+      commandPath: codexCommand,
     };
   }
 
@@ -223,6 +241,7 @@ async function diagnoseCodex() {
       authenticated: false,
       status: "usage_limit",
       message: "Codex usage limit reached.",
+      commandPath: codexCommand,
     };
   }
 
@@ -232,6 +251,7 @@ async function diagnoseCodex() {
     authenticated: true,
     status: "ready",
     message: "Codex CLI is ready.",
+    commandPath: codexCommand,
   };
 }
 
@@ -251,7 +271,8 @@ function parseLabelValueLines(text) {
 
 async function getCursorUsage() {
   const diagnostic = await diagnoseCursor();
-  const about = await runCmd("agent about");
+  const agent = quoteForCmd(resolveCursorAgentCommand());
+  const about = await runCmd(`${agent} about`);
   const aboutFields = parseLabelValueLines(about.stdout);
   const model = aboutFields.Model || null;
   const plan = aboutFields["Subscription Tier"] || null;
@@ -292,7 +313,8 @@ async function getCursorUsage() {
 
 async function getCodexUsage() {
   const diagnostic = await diagnoseCodex();
-  const login = await runCmd("codex login status");
+  const codex = quoteForCmd(resolveCodexCommand());
+  const login = await runCmd(`${codex} login status`);
   const loginText = `${login.stdout} ${login.stderr}`.trim();
 
   return {

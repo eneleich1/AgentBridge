@@ -107,7 +107,7 @@ function buildSessionReplayPrompt(session, messages, nextUserContent) {
   const summary = session.summary || "No summary yet.";
   const recentMessages = messages.slice(-8).map((message) => {
     const role = message.role === "agent" ? "Agent" : "User";
-    return `${role}: ${String(message.content || "").trim()}`;
+    return `${role}: ${formatMessageContent(message.content)}`;
   });
 
   return [
@@ -135,11 +135,30 @@ function buildSessionReplayPrompt(session, messages, nextUserContent) {
   ].join("\n");
 }
 
+function formatMessageContent(content) {
+  const text = String(content || "").trim();
+  const prefix = "[[agentbridge:duel-result]]";
+  if (!text.startsWith(prefix)) return text;
+
+  try {
+    const results = JSON.parse(text.slice(prefix.length));
+    return ["cursor", "codex"]
+      .map((agentId) => {
+        const result = results?.[agentId] || {};
+        const answer = String(result.content || result.error || "No response.").trim();
+        return `${agentId === "codex" ? "Codex" : "Cursor"} (${result.status || "unknown"}): ${answer}`;
+      })
+      .join("\n");
+  } catch {
+    return "Agent Duel result could not be parsed.";
+  }
+}
+
 function updateSessionSummary(previousSummary, recentAgentMessages) {
   const recentAgent = recentAgentMessages
     .filter((message) => message.content)
     .slice(-2)
-    .map((message) => message.content.trim().replace(/\s+/g, " "))
+    .map((message) => formatMessageContent(message.content).replace(/\s+/g, " "))
     .join(" ");
 
   if (!recentAgent) return previousSummary || "";

@@ -222,6 +222,17 @@ export const api = {
     return request("/api/agents", {}, serverUrl);
   },
 
+  getAgentDuelSettings(serverUrl = null) {
+    return request("/api/agents/duel-settings", {}, serverUrl);
+  },
+
+  updateAgentDuelSettings(enabled, serverUrl = null) {
+    return request("/api/agents/duel-settings", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    }, serverUrl);
+  },
+
   getAgentConfig(agentId, serverUrl = null) {
     return request(`/api/agents/${agentId}/config`, {}, serverUrl);
   },
@@ -315,6 +326,13 @@ export const api = {
 
   cancelSession(id, serverUrl = null) {
     return request(`/api/sessions/${id}/cancel`, { method: "POST" }, serverUrl);
+  },
+
+  selectDuelWinner(id, messageId, winner, serverUrl = null) {
+    return request(`/api/sessions/${id}/duel-winner`, {
+      method: "POST",
+      body: JSON.stringify({ messageId, winner }),
+    }, serverUrl);
   },
 
   getSessionMessages(id, serverUrl = null) {

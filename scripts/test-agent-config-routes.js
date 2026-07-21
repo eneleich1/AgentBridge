@@ -18,6 +18,21 @@ async function main() {
 
     let response = await app.inject({
       method: "GET",
+      url: "/api/agents/duel-settings",
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().duel.enabled, false);
+    assert.equal(response.json().duel.canEnable, false);
+
+    response = await app.inject({
+      method: "PUT",
+      url: "/api/agents/duel-settings",
+      payload: { enabled: true },
+    });
+    assert.equal(response.statusCode, 400);
+
+    response = await app.inject({
+      method: "GET",
       url: "/api/agents/codex/config",
     });
     assert.equal(response.statusCode, 200);
@@ -62,6 +77,34 @@ async function main() {
     });
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().agent.settings.configured, true);
+
+    response = await app.inject({
+      method: "PUT",
+      url: "/api/agents/codex/config",
+      payload: { configured: true },
+    });
+    assert.equal(response.statusCode, 200);
+
+    response = await app.inject({
+      method: "PUT",
+      url: "/api/agents/duel-settings",
+      payload: { enabled: true },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().duel.enabled, true);
+
+    response = await app.inject({
+      method: "DELETE",
+      url: "/api/agents/cursor/config",
+    });
+    assert.equal(response.statusCode, 200);
+
+    response = await app.inject({
+      method: "GET",
+      url: "/api/agents/duel-settings",
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().duel.enabled, false);
 
     response = await app.inject({
       method: "DELETE",

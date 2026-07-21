@@ -46,6 +46,22 @@ async function sessionsRoutes(fastify) {
     }
     return { session };
   });
+
+  fastify.post("/api/sessions/:sessionId/duel-winner", async (request, reply) => {
+    try {
+      const result = sessionManager.selectDuelWinner(
+        request.params.sessionId,
+        request.body?.messageId,
+        request.body?.winner
+      );
+      if (!result) {
+        return reply.code(404).send({ error: "Session not found" });
+      }
+      return result;
+    } catch (error) {
+      return reply.code(400).send({ error: error.message, code: error.code });
+    }
+  });
 }
 
 module.exports = sessionsRoutes;

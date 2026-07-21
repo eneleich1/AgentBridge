@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import ConfirmDialog from "./ConfirmDialog";
 
 function statusText(info) {
   if (!info) return "Not checked";
@@ -82,17 +83,23 @@ export default function SettingsMenu({
   codexModel,
   agentUsage,
   agentUsageLoading,
+  agentDuelEnabled,
+  canEnableAgentDuel,
   onRefreshUsage,
   onConfigureBackend,
   onDefaultAgentChange,
   onThemeChange,
   onConfigureAgent,
   onDeleteAgentConfig,
+  onAgentDuelEnabledChange,
   onClose,
 }) {
   const [deleteError, setDeleteError] = useState("");
   const [deleteNotice, setDeleteNotice] = useState("");
   const [deletingAgent, setDeletingAgent] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [updatingDuel, setUpdatingDuel] = useState(false);
+  const [duelError, setDuelError] = useState("");
   const selectedAgentName = defaultAgent === "codex" ? "Codex CLI" : "Cursor Agent";
   const selectedAgentStatus = setupStatus?.[defaultAgent];
   const selectedAgentConfigured = selectedAgentStatus?.configured === true;
@@ -100,38 +107,34 @@ export default function SettingsMenu({
   useEffect(() => {
     setDeleteError("");
     setDeleteNotice("");
+    setConfirmDeleteOpen(false);
   }, [defaultAgent]);
+
   const popoverStyle = useMemo(() => {
     if (!anchorRect || typeof window === "undefined") return undefined;
     const panelWidth = 360;
-    const panelMaxHeight = Math.min(560, window.innerHeight - 24);
     const gap = 8;
     const left = Math.min(anchorRect.right + gap, window.innerWidth - panelWidth - 12);
-    const top = Math.min(
-      Math.max(anchorRect.top - 8, 12),
-      window.innerHeight - panelMaxHeight - 12
-    );
+    const top = Math.max(anchorRect.top - 8, 12);
 
     return {
       left: `${Math.max(left, 12)}px`,
-      top: `${Math.max(top, 12)}px`,
+      top: `${top}px`,
       bottom: "auto",
+      maxHeight: "none",
+      overflow: "visible",
     };
   }, [anchorRect]);
 
   async function handleDeleteAgentConfig() {
     if (!onDeleteAgentConfig || !selectedAgentConfigured) return;
-    const confirmed = window.confirm(
-      `Delete the ${selectedAgentName} configuration from AgentBridge? ` +
-      "This will not uninstall the CLI or sign out of its account."
-    );
-    if (!confirmed) return;
 
     setDeletingAgent(true);
     setDeleteError("");
     setDeleteNotice("");
     try {
       await onDeleteAgentConfig(defaultAgent);
+      setConfirmDeleteOpen(false);
       setDeleteNotice(`${selectedAgentName} configuration deleted. Setup is required before using it again.`);
     } catch (error) {
       setDeleteError(String(error?.message || error));
@@ -140,86 +143,161 @@ export default function SettingsMenu({
     }
   }
 
+  async function handleAgentDuelToggle() {
+    if (updatingDuel || (!agentDuelEnabled && !canEnableAgentDuel)) return;
+    setUpdatingDuel(true);
+    setDuelError("");
+    try {
+      await onAgentDuelEnabledChange(!agentDuelEnabled);
+    } catch (error) {
+      setDuelError(String(error?.message || error));
+    } finally {
+      setUpdatingDuel(false);
+    }
+  }
+
   return (
-    <div className="settings-popover" role="dialog" aria-label="Settings" style={popoverStyle}>
-      <div className="settings-popover-header">
-        <div>
-          <strong>AgentBridge settings</strong>
-          <small>Agents and defaults</small>
-        </div>
-        <button type="button" className="settings-close" onClick={onClose} aria-label="Close">
-          x
-        </button>
-      </div>
-
-      <div className="settings-section">
-        <div className="settings-label">Default agent</div>
-        <div className="settings-choice-row">
-          <button
-            type="button"
-            className={`settings-choice ${defaultAgent === "cursor" ? "active" : ""}`}
-            onClick={() => onDefaultAgentChange("cursor")}
-          >
-            Cursor
-          </button>
-          <button
-            type="button"
-            className={`settings-choice ${defaultAgent === "codex" ? "active" : ""}`}
-            onClick={() => onDefaultAgentChange("codex")}
-          >
-            Codex
+    <>
+      <div className="settings-popover" role="dialog" aria-label="Settings" style={popoverStyle}>
+        <div className="settings-popover-header">
+          <div>
+            <strong>AgentBridge settings</strong>
+            <small>Theme, backend, and selected agent</small>
+          </div>
+          <button type="button" className="settings-close" onClick={onClose} aria-label="Close">
+            x
           </button>
         </div>
-      </div>
 
-      <div className="settings-section">
-        <div className="settings-label">Theme</div>
-        <div className="settings-choice-row theme-choice-row">
-          {["dark", "light", "system"].map((item) => (
+        <div className="settings-section">
+          <div className="settings-label">Theme</div>
+          <div className="settings-choice-row theme-choice-row">
+            {["dark", "light", "system"].map((item) => (
+              <button
+                type="button"
+                key={item}
+                className={`settings-choice ${theme === item ? "active" : ""}`}
+                onClick={() => onThemeChange(item)}
+              >
+                {item[0].toUpperCase() + item.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="settings-section settings-config-list">
+          <div className="settings-label">Backend</div>
+          <button type="button" className="settings-menu-item" onClick={onConfigureBackend}>
+            <span>Configure Backend</span>
+            <small>{setupStatus?.setupComplete ? "Connected" : "Needs setup"}</small>
+          </button>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-label">Optional features</div>
+          <div className="settings-feature-row">
+            <div className="settings-feature-copy">
+              <strong>Agent Duel</strong>
+              <small>
+                {agentDuelEnabled
+                  ? "Enabled in the chat agent selector."
+                  : canEnableAgentDuel
+                    ? "Compare Cursor and Codex on the same prompt."
+                    : "Configure both Cursor and Codex before enabling."}
+              </small>
+            </div>
             <button
               type="button"
-              key={item}
-              className={`settings-choice ${theme === item ? "active" : ""}`}
-              onClick={() => onThemeChange(item)}
+              role="switch"
+              aria-checked={agentDuelEnabled}
+              aria-label="Enable Agent Duel"
+              className={`settings-switch ${agentDuelEnabled ? "active" : ""}`}
+              disabled={updatingDuel || (!agentDuelEnabled && !canEnableAgentDuel)}
+              onClick={handleAgentDuelToggle}
             >
-              {item[0].toUpperCase() + item.slice(1)}
+              <span />
             </button>
-          ))}
+          </div>
+          {duelError && <div className="alert error">{duelError}</div>}
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-label">Default agent</div>
+          <div className="settings-choice-row">
+            <button
+              type="button"
+              className={`settings-choice ${defaultAgent === "cursor" ? "active" : ""}`}
+              onClick={() => onDefaultAgentChange("cursor")}
+            >
+              Cursor
+            </button>
+            <button
+              type="button"
+              className={`settings-choice ${defaultAgent === "codex" ? "active" : ""}`}
+              onClick={() => onDefaultAgentChange("codex")}
+            >
+              Codex
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-section settings-config-list">
+          <div className="settings-label">{selectedAgentName}</div>
+          <button
+            type="button"
+            className="settings-menu-item"
+            onClick={() => onConfigureAgent(defaultAgent)}
+          >
+            <span>Configure {selectedAgentName}</span>
+            <small>
+              {statusText(selectedAgentStatus)}
+              {defaultAgent === "codex" && codexModel ? ` - Model: ${codexModel}` : ""}
+            </small>
+          </button>
+
+          <UsageDisclosure
+            agentId={defaultAgent}
+            usage={agentUsage?.[defaultAgent]}
+            loading={agentUsageLoading?.[defaultAgent]}
+            onRefresh={() => onRefreshUsage(defaultAgent)}
+          />
+
+          <button
+            type="button"
+            className="settings-menu-item settings-menu-item-danger"
+            onClick={() => {
+              if (!selectedAgentConfigured || deletingAgent) return;
+              setDeleteError("");
+              setConfirmDeleteOpen(true);
+            }}
+            disabled={deletingAgent || !selectedAgentConfigured}
+          >
+            <span>{deletingAgent ? "Deleting configuration..." : `Delete ${selectedAgentName} configuration`}</span>
+            <small>Reset AgentBridge setup for this agent</small>
+          </button>
+          {deleteNotice && <div className="success-box">{deleteNotice}</div>}
+          {deleteError && <div className="alert error">{deleteError}</div>}
         </div>
       </div>
 
-      <div className="settings-section settings-config-list">
-        <button type="button" className="settings-menu-item" onClick={onConfigureBackend}>
-          <span>Configure Backend</span>
-          <small>{setupStatus?.setupComplete ? "Connected" : "Needs setup"}</small>
-        </button>
-
-        <button type="button" className="settings-menu-item" onClick={() => onConfigureAgent(defaultAgent)}>
-          <span>Configure {selectedAgentName}</span>
-          <small>
-            {statusText(selectedAgentStatus)}
-            {defaultAgent === "codex" && codexModel ? ` - Model: ${codexModel}` : ""}
-          </small>
-        </button>
-        <UsageDisclosure
-          agentId={defaultAgent}
-          usage={agentUsage?.[defaultAgent]}
-          loading={agentUsageLoading?.[defaultAgent]}
-          onRefresh={() => onRefreshUsage(defaultAgent)}
+      {confirmDeleteOpen && (
+        <ConfirmDialog
+          title={`Delete ${selectedAgentName} configuration`}
+          message={
+            `Remove the ${selectedAgentName} setup from AgentBridge? ` +
+            "This will not uninstall the CLI or sign out of its account. You will need to run the configuration wizard again before using it."
+          }
+          confirmLabel="Delete configuration"
+          cancelLabel="Cancel"
+          danger
+          busy={deletingAgent}
+          onConfirm={handleDeleteAgentConfig}
+          onCancel={() => {
+            if (deletingAgent) return;
+            setConfirmDeleteOpen(false);
+          }}
         />
-
-        <button
-          type="button"
-          className="settings-menu-item settings-menu-item-danger"
-          onClick={handleDeleteAgentConfig}
-          disabled={deletingAgent || !selectedAgentConfigured}
-        >
-          <span>{deletingAgent ? "Deleting configuration..." : `Delete ${selectedAgentName} configuration`}</span>
-          <small>Reset AgentBridge setup for this agent</small>
-        </button>
-        {deleteNotice && <div className="success-box">{deleteNotice}</div>}
-        {deleteError && <div className="alert error">{deleteError}</div>}
-      </div>
-    </div>
+      )}
+    </>
   );
 }

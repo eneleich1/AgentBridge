@@ -1,5 +1,6 @@
 const { createCursorAgent } = require("./cursorAgent");
 const { createCodexAgent } = require("./codexAgent");
+const { createDuelAgent } = require("./duelAgent");
 const { readJsonConfig, writeJsonConfig } = require("../utils/runtimeConfig");
 
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
@@ -26,6 +27,9 @@ const DEFAULT_CONFIG = {
       },
     },
   ],
+  features: {
+    agentDuelEnabled: false,
+  },
   maxConcurrency: 2,
   accessToken: "",
 };
@@ -40,6 +44,10 @@ function saveAgentsConfig(config) {
 
 function getAgent(agentType) {
   const config = loadAgentsConfig();
+  if (agentType === "duel") {
+    const codex = config.agents.find((agent) => agent.id === "codex");
+    return createDuelAgent({ model: codex?.settings?.model || DEFAULT_CODEX_MODEL });
+  }
   const meta = config.agents.find((a) => a.id === agentType);
 
   if (!meta || !meta.enabled) {
@@ -97,6 +105,45 @@ function isAgentConfigured(agentType) {
   return meta.settings?.configured !== false;
 }
 
+function configHasConfiguredAgent(config, agentType) {
+  const agent = config.agents.find((item) => item.id === agentType);
+  return Boolean(agent) && agent.settings?.configured !== false;
+}
+
+function getAgentDuelSettings() {
+  const config = loadAgentsConfig();
+  const cursorConfigured = configHasConfiguredAgent(config, "cursor");
+  const codexConfigured = configHasConfiguredAgent(config, "codex");
+  return {
+    enabled: config.features?.agentDuelEnabled === true,
+    canEnable: cursorConfigured && codexConfigured,
+  };
+}
+
+function updateAgentDuelSettings(nextSettings = {}) {
+  if (typeof nextSettings.enabled !== "boolean") {
+    const error = new Error("Agent Duel enabled must be true or false.");
+    error.code = "invalid_agent_duel_setting";
+    throw error;
+  }
+
+  const config = loadAgentsConfig();
+  const cursorConfigured = configHasConfiguredAgent(config, "cursor");
+  const codexConfigured = configHasConfiguredAgent(config, "codex");
+  if (nextSettings.enabled && (!cursorConfigured || !codexConfigured)) {
+    const error = new Error("Configure both Cursor Agent and Codex CLI before enabling Agent Duel.");
+    error.code = "agent_duel_requires_both_agents";
+    throw error;
+  }
+
+  config.features = {
+    ...(config.features || {}),
+    agentDuelEnabled: nextSettings.enabled,
+  };
+  saveAgentsConfig(config);
+  return getAgentDuelSettings();
+}
+
 function updateAgentConfig(agentType, nextSettings = {}) {
   const config = loadAgentsConfig();
   const index = config.agents.findIndex((a) => a.id === agentType);
@@ -126,6 +173,12 @@ function updateAgentConfig(agentType, nextSettings = {}) {
   }
 
   config.agents[index] = meta;
+  if (meta.settings?.configured === false) {
+    config.features = {
+      ...(config.features || {}),
+      agentDuelEnabled: false,
+    };
+  }
   saveAgentsConfig(config);
   return getAgentConfig(agentType);
 }
@@ -143,6 +196,10 @@ function resetAgentConfig(agentType) {
     ? { configured: false, model: DEFAULT_CODEX_MODEL }
     : { configured: false };
   config.agents[index] = meta;
+  config.features = {
+    ...(config.features || {}),
+    agentDuelEnabled: false,
+  };
   saveAgentsConfig(config);
   return getAgentConfig(agentType);
 }
@@ -154,6 +211,8 @@ module.exports = {
   getAccessToken,
   getAgentConfig,
   isAgentConfigured,
+  getAgentDuelSettings,
+  updateAgentDuelSettings,
   updateAgentConfig,
   resetAgentConfig,
 };

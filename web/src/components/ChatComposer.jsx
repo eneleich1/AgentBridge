@@ -8,6 +8,7 @@ export default function ChatComposer({
   agent,
   mode,
   running,
+  duelEnabled = false,
   onPromptChange,
   onAttachmentsChange,
   onAgentChange,
@@ -20,6 +21,7 @@ export default function ChatComposer({
 }) {
   const [voicePreview, setVoicePreview] = useState("");
   const [voiceListening, setVoiceListening] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const fileInputRef = useRef(null);
   const voiceInputRef = useRef(null);
   const textareaRef = useRef(null);
@@ -189,8 +191,13 @@ export default function ChatComposer({
         <select value={agent} onChange={(e) => onAgentChange(e.target.value)} disabled={running}>
           <option value="cursor">Cursor</option>
           <option value="codex">Codex</option>
+          {(duelEnabled || agent === "duel") && (
+            <option value="duel" disabled={!duelEnabled}>
+              Agent Duel{duelEnabled ? "" : " (disabled)"}
+            </option>
+          )}
         </select>
-        <select value={mode} onChange={(e) => onModeChange(e.target.value)} disabled={running}>
+        <select value={mode} onChange={(e) => onModeChange(e.target.value)} disabled={running || agent === "duel"}>
           <option value="ask">Ask</option>
           <option value="plan">Plan</option>
           <option value="execute">Execute</option>
@@ -241,15 +248,6 @@ export default function ChatComposer({
                 e.target.value = "";
               }}
             />
-            <button
-              type="button"
-              className="composer-icon-btn"
-              onClick={() => fileInputRef.current?.click()}
-              title="Attach image"
-              aria-label="Attach image"
-            >
-              +
-            </button>
             <VoiceInput
               ref={voiceInputRef}
               disabled={false}
@@ -263,76 +261,97 @@ export default function ChatComposer({
             />
             <button
               type="button"
-              className="composer-icon-btn"
-              onClick={handleClearPrompt}
-              disabled={!hasPromptText}
-              title="Clear prompt"
-              aria-label="Clear prompt"
+              className={`composer-icon-btn composer-more-btn ${toolsOpen ? "active" : ""}`}
+              onClick={() => setToolsOpen((current) => !current)}
+              title={toolsOpen ? "Hide tools" : "More tools"}
+              aria-label={toolsOpen ? "Hide tools" : "More tools"}
+              aria-expanded={toolsOpen}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M5 6h14M9 6V4h6v2m-7 3v8m4-8v8m4-8v8M7 6l1 14h8l1-14"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              {toolsOpen ? "−" : "⋯"}
             </button>
-            <button
-              type="button"
-              className="composer-icon-btn"
-              onClick={handleSelectAll}
-              disabled={!hasPromptText}
-              title="Select all"
-              aria-label="Select all"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M9 5H5v4M15 5h4v4M9 19H5v-4M15 19h4v-4"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <rect
-                  x="8"
-                  y="8"
-                  width="8"
-                  height="8"
-                  rx="1.5"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="composer-icon-btn"
-              onClick={handleCopyPrompt}
-              disabled={!hasPromptText}
-              title="Copy prompt"
-              aria-label="Copy prompt"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect
-                  x="9"
-                  y="9"
-                  width="10"
-                  height="10"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                />
-                <path
-                  d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
+            <div className={`composer-extra-tools ${toolsOpen ? "open" : ""}`}>
+              <button
+                type="button"
+                className="composer-icon-btn"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach image"
+                aria-label="Attach image"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="composer-icon-btn"
+                onClick={handleClearPrompt}
+                disabled={!hasPromptText}
+                title="Clear prompt"
+                aria-label="Clear prompt"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M5 6h14M9 6V4h6v2m-7 3v8m4-8v8m4-8v8M7 6l1 14h8l1-14"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="composer-icon-btn"
+                onClick={handleSelectAll}
+                disabled={!hasPromptText}
+                title="Select all"
+                aria-label="Select all"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M9 5H5v4M15 5h4v4M9 19H5v-4M15 19h4v-4"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <rect
+                    x="8"
+                    y="8"
+                    width="8"
+                    height="8"
+                    rx="1.5"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="composer-icon-btn"
+                onClick={handleCopyPrompt}
+                disabled={!hasPromptText}
+                title="Copy prompt"
+                aria-label="Copy prompt"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect
+                    x="9"
+                    y="9"
+                    width="10"
+                    height="10"
+                    rx="2"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  />
+                  <path
+                    d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
           <div className="composer-live-center">
             <LiveVoiceButton

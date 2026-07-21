@@ -7,6 +7,9 @@ const {
   updateSessionSummary,
 } = require("./messageParser");
 
+const DUEL_OUTPUT_PREFIX = "[[agentbridge:duel-output]]";
+const DUEL_RESULT_PREFIX = "[[agentbridge:duel-result]]";
+
 class AgentSession {
   constructor(manager, session) {
     this.manager = manager;
@@ -41,6 +44,7 @@ class AgentSession {
     let pendingRaw = "";
     let pendingStdout = "";
     let pendingStderr = "";
+    const pendingDuelOutput = new Map();
     let messageFlushTimer = null;
     let outputFlushTimer = null;
 
@@ -86,6 +90,15 @@ class AgentSession {
           text,
         }, this.session);
       }
+      for (const [key, output] of pendingDuelOutput) {
+        pendingDuelOutput.delete(key);
+        this.manager.emitSessionEvent("duel_output", sessionId, {
+          messageId: agentMessage.id,
+          agentId: output.agentId,
+          stream: output.stream,
+          text: output.text,
+        }, this.session);
+      }
     };
 
     const scheduleOutputFlush = () => {
@@ -101,6 +114,7 @@ class AgentSession {
       const result = await agent.run({
         projectPath: this.session.projectPath,
         prompt,
+        mode: this.session.mode || "ask",
         attachments,
         nativeSessionId: shouldResumeNative ? this.session.nativeSessionId : null,
         signal: this.abortController.signal,
@@ -130,6 +144,27 @@ class AgentSession {
           scheduleMessageFlush();
           scheduleOutputFlush();
         },
+        onDuelOutput: ({ agentId, stream, text }) => {
+          const chunk = normalizeChunk(text);
+          if (!chunk) return;
+          const normalizedStream = stream === "stderr" ? "stderr" : "stdout";
+          const marker = `${DUEL_OUTPUT_PREFIX}${JSON.stringify({
+            agentId,
+            stream: normalizedStream,
+            text: chunk,
+          })}\n`;
+          this.manager.appendSessionLog(sessionId, `${agentId}:${normalizedStream}`, chunk);
+          pendingRaw += marker;
+          const key = `${agentId}:${normalizedStream}`;
+          const current = pendingDuelOutput.get(key);
+          pendingDuelOutput.set(key, {
+            agentId,
+            stream: normalizedStream,
+            text: `${current?.text || ""}${chunk}`,
+          });
+          scheduleMessageFlush();
+          scheduleOutputFlush();
+        },
       });
 
       flushMessage();
@@ -137,14 +172,17 @@ class AgentSession {
 
       const { stdout, stderr } = terminal.toJSON();
       const rawStdout = result.rawStdout || stdout;
+      const duelResult = result.duelResults
+        ? `${DUEL_RESULT_PREFIX}${JSON.stringify(result.duelResults)}`
+        : null;
       const error = result.exitCode === 0 || result.cancelled
         ? null
         : classifyAgentError(this.session.agentType, `${stdout}\n${rawStdout}`, stderr);
 
       const finalStatus = result.cancelled ? "cancelled" : result.exitCode === 0 ? "completed" : "failed";
       const updatedMessage = this.manager.finishAgentMessage(agentMessage.id, {
-        content: stdout || (stderr ? error?.userMessage || stderr : ""),
-        raw: `${rawStdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`,
+        content: duelResult || stdout || (stderr ? error?.userMessage || stderr : ""),
+        raw: duelResult || `${rawStdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`,
         status: finalStatus,
         error,
       });

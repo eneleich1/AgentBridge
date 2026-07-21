@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { runProcess } = require("./runProcess");
+const { refreshProcessPath, resolveCodexCommand } = require("./cliPath");
 
 function appendImageArgs(args, attachments) {
   for (const attachment of attachments || []) {
@@ -290,6 +291,7 @@ function createJsonlParser({ onEvent, onText, onRaw }) {
  */
 function createCodexAgent(options = {}) {
   const model = options.model || "gpt-5.6-sol";
+  const sandboxMode = options.sandboxMode || "workspace-write";
 
   return {
     id: "codex",
@@ -326,11 +328,13 @@ function createCodexAgent(options = {}) {
             "--model",
             model,
             "--sandbox",
-            "workspace-write",
+            sandboxMode,
             "--skip-git-repo-check",
           ], attachments).concat(["-"]);
 
-      const args = ["/d", "/c", "codex", ...codexArgs];
+      refreshProcessPath({ force: true });
+      const codexCommand = resolveCodexCommand();
+      const args = ["/d", "/c", codexCommand, ...codexArgs];
       let visibleStdout = "";
       let rawStdout = "";
       let capturedNativeSessionId = nativeSessionId || null;

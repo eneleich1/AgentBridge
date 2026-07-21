@@ -6,7 +6,7 @@ const setupService = require("../services/setupService");
 const projectService = require("../services/projectService");
 const logService = require("../services/logService");
 const attachmentService = require("../services/attachmentService");
-const { getMaxConcurrency } = require("../agents/agentFactory");
+const { getAgentDuelSettings, getMaxConcurrency } = require("../agents/agentFactory");
 const { broadcast } = require("../realtime/websocket");
 const { DATA_DIR } = require("../utils/runtimeConfig");
 const { AgentSession } = require("./agentSession");
@@ -42,6 +42,7 @@ class SessionManager {
         status TEXT NOT NULL,
         process_id INTEGER,
         native_session_id TEXT,
+        duel_winner TEXT,
         summary TEXT DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -57,6 +58,7 @@ class SessionManager {
         attachments TEXT DEFAULT '[]',
         status TEXT NOT NULL,
         reply_to_message_id TEXT,
+        duel_winner TEXT,
         error_type TEXT,
         user_message TEXT,
         technical_message TEXT,
@@ -65,7 +67,9 @@ class SessionManager {
       );
     `);
     this.ensureColumn("sessions", "native_session_id", "TEXT");
+    this.ensureColumn("sessions", "duel_winner", "TEXT");
     this.ensureColumn("session_messages", "reply_to_message_id", "TEXT");
+    this.ensureColumn("session_messages", "duel_winner", "TEXT");
     this.restorePendingQueue();
     if (this.queue.length > 0) {
       setImmediate(() => this.processQueue());
@@ -91,6 +95,7 @@ class SessionManager {
       status: row.status,
       processId: row.process_id,
       nativeSessionId: row.native_session_id || null,
+      duelWinner: row.duel_winner || null,
       summary: row.summary || "",
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -110,6 +115,7 @@ class SessionManager {
       createdAt: row.created_at,
       status: row.status,
       replyToMessageId: row.reply_to_message_id || null,
+      duelWinner: row.duel_winner || null,
       error: row.error_type
         ? {
             type: row.error_type,
@@ -133,6 +139,14 @@ class SessionManager {
     return new Date().toISOString();
   }
 
+  assertSessionAgentEnabled(session) {
+    if (session.agentType !== "duel") return;
+    if (getAgentDuelSettings().enabled) return;
+    const error = new Error("Enable Agent Duel in Settings before starting another round.");
+    error.code = "agent_duel_disabled";
+    throw error;
+  }
+
   async createSession({ projectId, agentType, mode }) {
     const setup = await setupService.assertCanRunTask({ agentType, projectId });
     const project = projectService.getProjectById(projectId);
@@ -147,11 +161,12 @@ class SessionManager {
       projectPath: project.path,
       projectName: project.name,
       agentType,
-      mode: mode || "ask",
+      mode: agentType === "duel" ? "plan" : mode || "ask",
       sessionMode: agentType === "codex" ? "native-resume" : "context-replay",
       status: setupService.isAgentReady(agentType, setup) ? "ready" : "failed",
       processId: null,
       nativeSessionId: null,
+      duelWinner: null,
       summary: "",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -161,10 +176,10 @@ class SessionManager {
     this.db.prepare(`
       INSERT INTO sessions (
         id, project_id, project_path, project_name, agent_type, mode, session_mode,
-        status, process_id, native_session_id, summary, created_at, updated_at, last_activity_at
+        status, process_id, native_session_id, duel_winner, summary, created_at, updated_at, last_activity_at
       ) VALUES (
         @id, @projectId, @projectPath, @projectName, @agentType, @mode, @sessionMode,
-        @status, @processId, @nativeSessionId, @summary, @createdAt, @updatedAt, @lastActivityAt
+        @status, @processId, @nativeSessionId, @duelWinner, @summary, @createdAt, @updatedAt, @lastActivityAt
       )
     `).run(session);
 
@@ -219,6 +234,7 @@ class SessionManager {
         status = @status,
         process_id = @processId,
         native_session_id = @nativeSessionId,
+        duel_winner = @duelWinner,
         summary = @summary,
         updated_at = @updatedAt,
         last_activity_at = @lastActivityAt
@@ -230,6 +246,7 @@ class SessionManager {
       status: next.status,
       processId: next.processId,
       nativeSessionId: next.nativeSessionId || null,
+      duelWinner: next.duelWinner || null,
       summary: next.summary,
       updatedAt: next.updatedAt,
       lastActivityAt: next.lastActivityAt || next.updatedAt,
@@ -256,6 +273,7 @@ class SessionManager {
       attachments,
       status,
       replyToMessageId,
+      duelWinner: null,
       createdAt: this.now(),
       errorType: error?.type || null,
       userMessage: error?.userMessage || null,
@@ -265,10 +283,10 @@ class SessionManager {
 
     this.db.prepare(`
       INSERT INTO session_messages (
-        id, session_id, role, content, raw, attachments, status, reply_to_message_id,
+        id, session_id, role, content, raw, attachments, status, reply_to_message_id, duel_winner,
         error_type, user_message, technical_message, fix_steps, created_at
       ) VALUES (
-        @id, @sessionId, @role, @content, @raw, @attachments, @status, @replyToMessageId,
+        @id, @sessionId, @role, @content, @raw, @attachments, @status, @replyToMessageId, @duelWinner,
         @errorType, @userMessage, @technicalMessage, @fixSteps, @createdAt
       )
     `).run({
@@ -528,6 +546,11 @@ class SessionManager {
     if (!session) {
       throw new Error("Session not found");
     }
+    this.assertSessionAgentEnabled(session);
+    await setupService.assertCanRunTask({
+      agentType: session.agentType,
+      projectId: session.projectId,
+    });
 
     if (!content?.trim() && attachments.length === 0) {
       throw new Error("Message content or attachments are required");
@@ -565,6 +588,7 @@ class SessionManager {
     });
     const queuedSession = this.updateSession(sessionId, {
       status: "queued",
+      duelWinner: session.agentType === "duel" ? null : session.duelWinner,
       lastActivityAt: this.now(),
     });
     this.emitSessionEvent("message_added", sessionId, { message }, queuedSession);
@@ -579,6 +603,11 @@ class SessionManager {
     if (!session) {
       throw new Error("Session not found");
     }
+    this.assertSessionAgentEnabled(session);
+    await setupService.assertCanRunTask({
+      agentType: session.agentType,
+      projectId: session.projectId,
+    });
     if (this.activeRuns.has(sessionId) || session.status === "running") {
       throw new Error("Cannot edit a message while the session is running.");
     }
@@ -614,6 +643,7 @@ class SessionManager {
     const updatedSession = this.updateSession(sessionId, {
       status: "queued",
       nativeSessionId: null,
+      duelWinner: session.agentType === "duel" ? null : session.duelWinner,
       sessionMode: session.agentType === "codex" ? "context-replay" : session.sessionMode,
       lastActivityAt: this.now(),
     });
@@ -781,6 +811,60 @@ class SessionManager {
     });
     this.emitSessionEvent("session_cancelled", sessionId, {}, updated);
     return updated;
+  }
+
+  selectDuelWinner(sessionId, messageId, winner) {
+    const session = this.getSessionById(sessionId);
+    if (!session) return null;
+    if (session.agentType !== "duel") {
+      const error = new Error("This session is not an Agent Duel.");
+      error.code = "not_a_duel";
+      throw error;
+    }
+    if (!["cursor", "codex"].includes(winner)) {
+      const error = new Error("Winner must be cursor or codex.");
+      error.code = "invalid_duel_winner";
+      throw error;
+    }
+    if (["queued", "running"].includes(session.status)) {
+      const error = new Error("Wait for both agents to finish before choosing a winner.");
+      error.code = "duel_in_progress";
+      throw error;
+    }
+    const message = this.getMessageById(messageId);
+    if (
+      !message ||
+      message.sessionId !== sessionId ||
+      message.role !== "agent" ||
+      message.status !== "completed" ||
+      !String(message.content || "").startsWith("[[agentbridge:duel-result]]")
+    ) {
+      const error = new Error("Select a completed Agent Duel result.");
+      error.code = "invalid_duel_message";
+      throw error;
+    }
+    const resultMarker = "[[agentbridge:duel-result]]";
+    let duelResults;
+    try {
+      duelResults = JSON.parse(message.content.slice(resultMarker.length));
+    } catch {
+      duelResults = null;
+    }
+    if (duelResults?.[winner]?.status !== "completed") {
+      const error = new Error("Only an agent with a completed proposal can win the duel.");
+      error.code = "invalid_duel_winner";
+      throw error;
+    }
+
+    const updated = this.updateSession(sessionId, {
+      duelWinner: winner,
+      lastActivityAt: this.now(),
+    });
+    this.db.prepare("UPDATE session_messages SET duel_winner = ? WHERE id = ?")
+      .run(winner, messageId);
+    const updatedMessage = this.getMessageById(messageId);
+    this.emitSessionEvent("message_updated", sessionId, { message: updatedMessage }, updated);
+    return { session: updated, message: updatedMessage };
   }
 }
 

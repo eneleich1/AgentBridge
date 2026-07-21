@@ -5,6 +5,7 @@ const cors = require("@fastify/cors");
 const websocket = require("@fastify/websocket");
 const fastifyStatic = require("@fastify/static");
 const { getAccessToken } = require("./agents/agentFactory");
+const { refreshProcessPath } = require("./agents/cliPath");
 const setupService = require("./services/setupService");
 const taskService = require("./services/taskService");
 const sessionManager = require("./sessions/sessionManager");
@@ -100,6 +101,7 @@ function buildApp() {
 }
 
 async function start() {
+  refreshProcessPath({ force: true });
   taskService.initDb();
   sessionManager.init();
   const app = buildApp();

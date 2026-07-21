@@ -1,8 +1,10 @@
 const {
   getAgentConfig,
+  getAgentDuelSettings,
   listAgents,
   resetAgentConfig,
   updateAgentConfig,
+  updateAgentDuelSettings,
 } = require("../agents/agentFactory");
 const { getCodexUsage, getCursorUsage } = require("../agents/diagnostics");
 const { invalidateSetupStatusCache } = require("../services/setupService");
@@ -10,6 +12,20 @@ const { invalidateSetupStatusCache } = require("../services/setupService");
 async function agentsRoutes(fastify) {
   fastify.get("/api/agents", async () => {
     return { agents: listAgents() };
+  });
+
+  fastify.get("/api/agents/duel-settings", async () => {
+    return { duel: getAgentDuelSettings() };
+  });
+
+  fastify.put("/api/agents/duel-settings", async (request, reply) => {
+    try {
+      const duel = updateAgentDuelSettings(request.body || {});
+      invalidateSetupStatusCache();
+      return { duel };
+    } catch (error) {
+      return reply.code(400).send({ error: error.message, code: error.code });
+    }
   });
 
   fastify.get("/api/agents/:id/config", async (request, reply) => {

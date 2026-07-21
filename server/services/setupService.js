@@ -1,6 +1,6 @@
 const projectService = require("./projectService");
 const { diagnoseCursor, diagnoseCodex } = require("../agents/diagnostics");
-const { isAgentConfigured } = require("../agents/agentFactory");
+const { getAgentDuelSettings, isAgentConfigured } = require("../agents/agentFactory");
 
 const VERSION = require("../../package.json").version;
 const SETUP_CACHE_TTL_MS = 10000;
@@ -31,13 +31,34 @@ function buildSetupStatus(cursor, codex) {
     ...codex,
     configured: isAgentConfigured("codex"),
   };
+  const duelSettings = getAgentDuelSettings();
   const hasReadyAgent =
     (cursorStatus.configured && cursorStatus.status === "ready") ||
     (codexStatus.configured && codexStatus.status === "ready");
+  const duelStatus = {
+    enabled: duelSettings.enabled,
+    canEnable: duelSettings.canEnable,
+    configured: cursorStatus.configured && codexStatus.configured,
+    authenticated: cursorStatus.authenticated && codexStatus.authenticated,
+    installed: cursorStatus.installed && codexStatus.installed,
+    status: !duelSettings.enabled
+      ? "disabled"
+      : cursorStatus.configured && codexStatus.configured &&
+      cursorStatus.status === "ready" && codexStatus.status === "ready"
+        ? "ready"
+        : "needs_setup",
+    message: !duelSettings.enabled
+      ? "Enable Agent Duel in Settings after configuring both agents."
+      : cursorStatus.configured && codexStatus.configured &&
+      cursorStatus.status === "ready" && codexStatus.status === "ready"
+        ? "Codex CLI and Cursor Agent are ready for Agent Duel."
+        : "Configure both Codex CLI and Cursor Agent before starting Agent Duel.",
+  };
 
   return {
     cursor: cursorStatus,
     codex: codexStatus,
+    duel: duelStatus,
     projects,
     setupComplete: hasProject && hasReadyAgent,
     checks: {
@@ -95,6 +116,11 @@ function isAgentReady(agentType, setupStatus) {
   if (agentType === "codex") {
     return setupStatus.codex.configured !== false && setupStatus.codex.status === "ready";
   }
+  if (agentType === "duel") {
+    return setupStatus.duel?.enabled === true &&
+      setupStatus.duel.configured === true &&
+      setupStatus.duel.status === "ready";
+  }
   return false;
 }
 
@@ -119,7 +145,9 @@ async function assertCanRunTask({ agentType, projectId }) {
     const agentInfo = setup[agentType];
     const err = new Error(
       agentInfo?.configured === false
-        ? `Configure ${agentType === "codex" ? "Codex CLI" : "Cursor Agent"} in AgentBridge settings before running tasks.`
+        ? agentType === "duel"
+          ? "Configure both Codex CLI and Cursor Agent in AgentBridge settings before starting Agent Duel."
+          : `Configure ${agentType === "codex" ? "Codex CLI" : "Cursor Agent"} in AgentBridge settings before running tasks.`
         : agentInfo?.message || `${agentType} is not ready on the desktop.`
     );
     err.code = agentInfo?.configured === false ? "agent_not_configured" : "agent_not_ready";

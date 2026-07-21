@@ -28,6 +28,7 @@ AgentBridge separates the control surface from that environment:
 - Node.js and Fastify REST API.
 - WebSocket updates for tasks and session messages.
 - Codex CLI and Cursor Agent adapters.
+- Optional Agent Duel comparisons with parallel proposals and a persistent winner per round.
 - Native Codex session continuation.
 - Task queue with configurable concurrency.
 - Cancellation through `AbortController`.

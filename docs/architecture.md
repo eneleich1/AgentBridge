@@ -33,6 +33,14 @@ The session layer preserves conversations and serializes messages. When an
 agent exposes a native session identifier, AgentBridge stores it and resumes
 the native session rather than replaying an entire conversation.
 
+Agent Duel is an opt-in, proposal-only session type. It stays disabled until
+the user enables it in Settings, which requires both agent configurations. It
+sends the same contextual prompt to Cursor and Codex concurrently, streams each
+response independently, stores the structured comparison in the normal message
+history, and persists the
+winner selected for each completed round. Codex runs with its read-only sandbox
+for duel rounds; both contestants also receive explicit no-edit instructions.
+
 ### Agent adapters
 
 Adapters isolate CLI-specific arguments, output parsing, diagnostics, and

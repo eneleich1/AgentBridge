@@ -4,6 +4,7 @@ import { connectWebSocket } from "./services/websocket";
 import { DEFAULT_CODEX_MODEL } from "./constants/codexModels";
 import Sidebar from "./components/Sidebar";
 import ChatMessage, { extractDisplayContent } from "./components/ChatMessage";
+import AgentDuelMessage from "./components/AgentDuelMessage";
 import ChatComposer from "./components/ChatComposer";
 import SettingsMenu from "./components/SettingsMenu";
 import AgentSetupWizard from "./components/AgentSetupWizard";
@@ -45,6 +46,43 @@ function mergeMessageList(current, nextMessage) {
 
 function isSessionBusy(status) {
   return status === "queued" || status === "running";
+}
+
+function getAgentLabel(agentId, detailed = false) {
+  if (agentId === "cursor") return detailed ? "Cursor Agent" : "Cursor";
+  if (agentId === "codex") return detailed ? "Codex CLI" : "Codex";
+  return "Agent Duel";
+}
+
+function getAgentNotReadyMessage(agentType, setupStatus) {
+  if (!setupStatus) {
+    return "Backend is not connected. Configure an AgentBridge backend before running tasks.";
+  }
+
+  if (agentType === "duel") {
+    if (setupStatus.duel?.enabled !== true) {
+      return "Enable Agent Duel in Settings before starting a duel.";
+    }
+    if (setupStatus.duel?.configured !== true) {
+      return "Configure both Codex CLI and Cursor Agent in AgentBridge settings before starting Agent Duel.";
+    }
+    if (setupStatus.duel?.status !== "ready") {
+      return setupStatus.duel?.message || "Agent Duel is not ready on the desktop.";
+    }
+    return null;
+  }
+
+  const agentInfo = setupStatus?.[agentType];
+  if (!agentInfo) {
+    return `${getAgentLabel(agentType, true)} is not available.`;
+  }
+  if (agentInfo.configured !== true) {
+    return `Configure ${getAgentLabel(agentType, true)} in AgentBridge settings before running tasks.`;
+  }
+  if (agentInfo.status !== "ready") {
+    return agentInfo.message || `${getAgentLabel(agentType, true)} is not ready on the desktop.`;
+  }
+  return null;
 }
 
 const DEFAULT_AGENT_CONFIGS = {
@@ -327,6 +365,20 @@ export default function App() {
     }
   }
 
+  function queueDuelOutput(payload) {
+    const pending = pendingOutputRef.current;
+    const current = pending.get(payload.messageId) || { content: "", raw: "" };
+    current.raw += `[[agentbridge:duel-output]]${JSON.stringify({
+      agentId: payload.agentId,
+      stream: payload.stream,
+      text: payload.text || "",
+    })}\n`;
+    pending.set(payload.messageId, current);
+    if (!outputFlushTimerRef.current) {
+      outputFlushTimerRef.current = window.setTimeout(flushPendingAgentOutput, 50);
+    }
+  }
+
   useEffect(() => {
     const ws = connectWebSocket((msg) => {
       if (msg.type === "connected") {
@@ -374,11 +426,15 @@ export default function App() {
         queueAgentOutput(msg.payload);
       }
 
+      if (msg.type === "duel_output" && msg.payload?.messageId && msg.sessionId === selectedSessionIdRef.current) {
+        queueDuelOutput(msg.payload);
+      }
+
       if ((msg.type === "agent_error" || msg.type === "session_completed") && msg.payload?.message) {
         if (msg.sessionId === selectedSessionIdRef.current) {
           flushPendingAgentOutput();
           setMessages((prev) => mergeMessageList(prev, msg.payload.message));
-          if (msg.payload.message.status !== "cancelled") {
+          if (msg.payload.message.status !== "cancelled" && msg.session?.agentType !== "duel") {
             const finalText =
               extractDisplayContent(msg.payload.message.raw, msg.payload.message.content) ||
               msg.payload.message.error?.userMessage ||
@@ -484,10 +540,8 @@ export default function App() {
   }
 
   function openAgentWizard(nextAgent) {
-    if (wsStatus !== "connected") {
-      setBackendWizardOpen(true);
-      return;
-    }
+    setSettingsOpen(false);
+    setBackendWizardOpen(false);
     setMobileMenuOpen(false);
     setAgentWizard(nextAgent);
   }
@@ -594,9 +648,17 @@ export default function App() {
       return;
     }
 
+    const runAgent = activeSession?.agentType || agent;
+    const notReadyMessage = getAgentNotReadyMessage(runAgent, setupStatus);
+    if (notReadyMessage) {
+      setError(notReadyMessage);
+      return;
+    }
+
     const originalPrompt = prompt;
     const text = buildPrompt(mode, prompt.trim());
     const outgoingAttachments = attachments;
+    const hadSession = Boolean(activeSession);
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
 
@@ -637,6 +699,9 @@ export default function App() {
         setPrompt(originalPrompt);
         setAttachments(outgoingAttachments);
         setError(err.message);
+        if (!hadSession && !selectedSessionIdRef.current) {
+          setIsDraft(true);
+        }
       }
     }
   }
@@ -662,11 +727,19 @@ export default function App() {
       throw new Error(message);
     }
 
+    const runAgent = activeSession?.agentType || agent;
+    const notReadyMessage = getAgentNotReadyMessage(runAgent, setupStatus);
+    if (notReadyMessage) {
+      setError(notReadyMessage);
+      throw new Error(notReadyMessage);
+    }
+
     if (running && activeSession?.id) {
       await handleLiveInterrupt();
     }
 
     const text = buildPrompt(currentSession?.mode || mode, trimmedText);
+    const hadSession = Boolean(activeSession);
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
 
@@ -699,6 +772,9 @@ export default function App() {
     } catch (err) {
       if (sessionRequestIdRef.current === requestId) {
         setRunning(false);
+        if (!hadSession && !selectedSessionIdRef.current) {
+          setIsDraft(true);
+        }
       }
       setError(err.message);
       throw err;
@@ -707,6 +783,12 @@ export default function App() {
 
   async function handleReplayUserMessage(message, nextContent) {
     if (!activeSession?.id || running) return;
+
+    const notReadyMessage = getAgentNotReadyMessage(activeSession.agentType || agent, setupStatus);
+    if (notReadyMessage) {
+      setError(notReadyMessage);
+      return;
+    }
 
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
@@ -745,6 +827,30 @@ export default function App() {
     }
   }
 
+  async function handleSelectDuelWinner(messageId, winner) {
+    if (!activeSession?.id) return;
+    try {
+      const { session, message } = await api.selectDuelWinner(activeSession.id, messageId, winner);
+      setActiveSession(session);
+      setMessages((prev) => mergeMessageList(prev, message));
+      setSessions((prev) => prev.map((item) =>
+        item.id === session.id ? buildSessionPreview({ ...item, ...session }) : item
+      ));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function handleAgentDuelEnabledChange(enabled) {
+    await api.updateAgentDuelSettings(enabled);
+    const nextSetupStatus = await api.refreshSetupStatus();
+    setSetupStatus(nextSetupStatus);
+    if (!enabled && isDraft && agent === "duel") {
+      setAgent(defaultAgent);
+      setMode("ask");
+    }
+  }
+
   async function handleSaveAgentConfig(agentId, settings) {
     const { agent: updatedAgent } = await api.updateAgentConfig(agentId, settings);
     setAgentConfigs((current) => ({ ...current, [agentId]: updatedAgent }));
@@ -762,18 +868,19 @@ export default function App() {
     setAgentConfigs((current) => ({ ...current, [agentId]: resetAgent }));
     setSetupStatus((current) => updateSetupAgentConfigured(current, agentId, false));
     await refresh();
+    if (isDraft && agent === "duel") {
+      setAgent(defaultAgent);
+      setMode("ask");
+    }
     return resetAgent;
   }
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const currentSession = activeSession || null;
-  const composerBlocked =
-    !selectedProjectId ||
-    setupStatus?.[agent]?.configured !== true ||
-    setupStatus?.[agent]?.status !== "ready";
 
   const mobileHeaderTitle = selectedProject?.name || "AgentBridge";
-  const mobileHeaderSubtitle = `${(currentSession?.agentType || agent) === "cursor" ? "Cursor" : "Codex"} / ${health?.hostname || "desktop"} / ${currentSession?.mode || mode}`;
+  const currentAgentType = currentSession?.agentType || agent;
+  const mobileHeaderSubtitle = `${getAgentLabel(currentAgentType)} / ${health?.hostname || "desktop"} / ${currentSession?.mode || mode}`;
   const connectionLabel = wsStatus === "connected"
     ? "Connected"
     : setupStatus?.setupComplete
@@ -847,7 +954,7 @@ export default function App() {
               <p>
                 {isMobile
                   ? mobileHeaderSubtitle
-                  : `${(currentSession?.agentType || agent) === "cursor" ? "Cursor Agent" : "Codex CLI"} / ${health?.hostname || "desktop"} / ${currentSession?.sessionMode === "live-process" ? "Live" : currentSession?.sessionMode === "native-resume" ? "Native Resume" : currentSession?.sessionMode === "context-replay" ? "Context Replay" : "Task"} / ${currentSession?.status || "draft"}`}
+                  : `${getAgentLabel(currentAgentType, true)} / ${health?.hostname || "desktop"} / ${currentSession?.sessionMode === "live-process" ? "Live" : currentSession?.sessionMode === "native-resume" ? "Native Resume" : currentSession?.sessionMode === "context-replay" ? "Context Replay" : "Task"} / ${currentSession?.status || "draft"}`}
               </p>
             </div>
 
@@ -874,7 +981,7 @@ export default function App() {
                 <div className="empty-icon">*</div>
                 <h3>New chat</h3>
                 <p>
-                  Send a prompt to run {agent === "cursor" ? "Cursor" : "Codex"} on{" "}
+                  Send a prompt to run {getAgentLabel(agent)} on{" "}
                   <strong>{selectedProject?.name || "your project"}</strong> at{" "}
                   {health?.hostname || "the desktop"}.
                 </p>
@@ -885,12 +992,20 @@ export default function App() {
               <div className="chat-thread">
                 {messages.map((message) => (
                   <div className="chat-turn" key={message.id}>
-                    <ChatMessage
-                      message={message}
-                      session={currentSession}
-                      running={running}
-                      onReplayUserMessage={handleReplayUserMessage}
-                    />
+                    {currentSession?.agentType === "duel" && message.role === "agent" ? (
+                      <AgentDuelMessage
+                        message={message}
+                        session={currentSession}
+                        onSelectWinner={handleSelectDuelWinner}
+                      />
+                    ) : (
+                      <ChatMessage
+                        message={message}
+                        session={currentSession}
+                        running={running}
+                        onReplayUserMessage={handleReplayUserMessage}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -899,19 +1014,20 @@ export default function App() {
             <div ref={chatEndRef} />
           </div>
 
-          <div
-            className={isMobile ? "mobile-composer-shell" : ""}
-            style={composerBlocked ? { opacity: 0.7, pointerEvents: "none" } : undefined}
-          >
+          <div className={isMobile ? "mobile-composer-shell" : ""}>
             <ChatComposer
               prompt={prompt}
               attachments={attachments}
               agent={currentSession?.agentType || agent}
               mode={currentSession?.mode || mode}
               running={running}
+              duelEnabled={setupStatus?.duel?.enabled === true}
               onPromptChange={setPrompt}
               onAttachmentsChange={setAttachments}
-              onAgentChange={setAgent}
+              onAgentChange={(nextAgent) => {
+                setAgent(nextAgent);
+                if (nextAgent === "duel") setMode("plan");
+              }}
               onModeChange={setMode}
               onSend={handleSend}
               onCancel={handleCancel}
@@ -931,6 +1047,8 @@ export default function App() {
           codexModel={agentConfigs.codex?.settings?.model || DEFAULT_CODEX_MODEL}
           agentUsage={agentUsage}
           agentUsageLoading={agentUsageLoading}
+          agentDuelEnabled={setupStatus?.duel?.enabled === true}
+          canEnableAgentDuel={setupStatus?.duel?.canEnable === true}
           theme={theme}
           onRefreshUsage={refreshAgentUsage}
           onConfigureBackend={openBackendWizard}
@@ -945,6 +1063,7 @@ export default function App() {
             openAgentWizard(nextAgent);
           }}
           onDeleteAgentConfig={handleDeleteAgentConfig}
+          onAgentDuelEnabledChange={handleAgentDuelEnabledChange}
           onClose={() => setSettingsOpen(false)}
         />
       )}
