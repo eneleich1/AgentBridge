@@ -1,5 +1,6 @@
 const projectService = require("./projectService");
 const { diagnoseCursor, diagnoseCodex } = require("../agents/diagnostics");
+const { isAgentConfigured } = require("../agents/agentFactory");
 
 const VERSION = require("../../package.json").version;
 const SETUP_CACHE_TTL_MS = 10000;
@@ -9,6 +10,7 @@ let setupCache = {
   expiresAt: 0,
 };
 let setupInFlight = null;
+let setupGeneration = 0;
 
 function getHealth() {
   return {
@@ -21,12 +23,21 @@ function getHealth() {
 function buildSetupStatus(cursor, codex) {
   const projects = projectService.listProjects();
   const hasProject = projects.length > 0;
+  const cursorStatus = {
+    ...cursor,
+    configured: isAgentConfigured("cursor"),
+  };
+  const codexStatus = {
+    ...codex,
+    configured: isAgentConfigured("codex"),
+  };
   const hasReadyAgent =
-    cursor.status === "ready" || codex.status === "ready";
+    (cursorStatus.configured && cursorStatus.status === "ready") ||
+    (codexStatus.configured && codexStatus.status === "ready");
 
   return {
-    cursor,
-    codex,
+    cursor: cursorStatus,
+    codex: codexStatus,
     projects,
     setupComplete: hasProject && hasReadyAgent,
     checks: {
@@ -40,6 +51,12 @@ async function getSetupStatus(options = {}) {
   const forceRefresh = options.forceRefresh === true;
   const now = Date.now();
 
+  if (forceRefresh) {
+    setupGeneration += 1;
+    setupCache = { value: null, expiresAt: 0 };
+    setupInFlight = null;
+  }
+
   if (!forceRefresh && setupCache.value && setupCache.expiresAt > now) {
     return setupCache.value;
   }
@@ -48,26 +65,36 @@ async function getSetupStatus(options = {}) {
     return setupInFlight;
   }
 
-  setupInFlight = Promise.all([diagnoseCursor(), diagnoseCodex()])
+  const requestGeneration = setupGeneration;
+  const request = Promise.all([diagnoseCursor(), diagnoseCodex()])
     .then(([cursor, codex]) => {
       const status = buildSetupStatus(cursor, codex);
-      setupCache = {
-        value: status,
-        expiresAt: Date.now() + SETUP_CACHE_TTL_MS,
-      };
+      if (requestGeneration === setupGeneration) {
+        setupCache = {
+          value: status,
+          expiresAt: Date.now() + SETUP_CACHE_TTL_MS,
+        };
+      }
       return status;
     })
     .finally(() => {
-      setupInFlight = null;
+      if (setupInFlight === request) {
+        setupInFlight = null;
+      }
     });
 
-  return setupInFlight;
+  setupInFlight = request;
+  return request;
 }
 
 function isAgentReady(agentType, setupStatus) {
   if (!setupStatus) return false;
-  if (agentType === "cursor") return setupStatus.cursor.status === "ready";
-  if (agentType === "codex") return setupStatus.codex.status === "ready";
+  if (agentType === "cursor") {
+    return setupStatus.cursor.configured !== false && setupStatus.cursor.status === "ready";
+  }
+  if (agentType === "codex") {
+    return setupStatus.codex.configured !== false && setupStatus.codex.status === "ready";
+  }
   return false;
 }
 
@@ -91,9 +118,11 @@ async function assertCanRunTask({ agentType, projectId }) {
   if (!isAgentReady(agentType, setup)) {
     const agentInfo = setup[agentType];
     const err = new Error(
-      agentInfo?.message || `${agentType} is not ready on the desktop.`
+      agentInfo?.configured === false
+        ? `Configure ${agentType === "codex" ? "Codex CLI" : "Cursor Agent"} in AgentBridge settings before running tasks.`
+        : agentInfo?.message || `${agentType} is not ready on the desktop.`
     );
-    err.code = "agent_not_ready";
+    err.code = agentInfo?.configured === false ? "agent_not_configured" : "agent_not_ready";
     err.agent = agentType;
     err.setup = setup;
     throw err;
@@ -103,10 +132,12 @@ async function assertCanRunTask({ agentType, projectId }) {
 }
 
 function invalidateSetupStatusCache() {
+  setupGeneration += 1;
   setupCache = {
     value: null,
     expiresAt: 0,
   };
+  setupInFlight = null;
 }
 
 module.exports = {

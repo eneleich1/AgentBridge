@@ -32,9 +32,9 @@ export default function ChatComposer({
   }
 
   function handleKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !running) {
       e.preventDefault();
-      if (!running && (prompt.trim() || attachments.length > 0)) handleSend();
+      if (prompt.trim() || attachments.length > 0) handleSend();
     }
   }
 
@@ -225,8 +225,7 @@ export default function ChatComposer({
             }}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
-            placeholder="Message the desktop agent..."
-            disabled={running}
+            placeholder={running ? "The agent is working. Type your next message here..." : "Message the desktop agent..."}
           />
         </div>
         <div className="composer-box-actions">
@@ -246,7 +245,6 @@ export default function ChatComposer({
               type="button"
               className="composer-icon-btn"
               onClick={() => fileInputRef.current?.click()}
-              disabled={running}
               title="Attach image"
               aria-label="Attach image"
             >
@@ -254,7 +252,7 @@ export default function ChatComposer({
             </button>
             <VoiceInput
               ref={voiceInputRef}
-              disabled={running}
+              disabled={false}
               language="es-US"
               onListeningChange={setVoiceListening}
               onInterimTranscript={setVoicePreview}
@@ -267,7 +265,7 @@ export default function ChatComposer({
               type="button"
               className="composer-icon-btn"
               onClick={handleClearPrompt}
-              disabled={running || !hasPromptText}
+              disabled={!hasPromptText}
               title="Clear prompt"
               aria-label="Clear prompt"
             >
@@ -285,7 +283,7 @@ export default function ChatComposer({
               type="button"
               className="composer-icon-btn"
               onClick={handleSelectAll}
-              disabled={running || !hasPromptText}
+              disabled={!hasPromptText}
               title="Select all"
               aria-label="Select all"
             >
@@ -312,7 +310,7 @@ export default function ChatComposer({
               type="button"
               className="composer-icon-btn"
               onClick={handleCopyPrompt}
-              disabled={running || !hasPromptText}
+              disabled={!hasPromptText}
               title="Copy prompt"
               aria-label="Copy prompt"
             >

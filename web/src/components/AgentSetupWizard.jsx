@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../services/api";
+import { CODEX_MODEL_OPTIONS, DEFAULT_CODEX_MODEL } from "../constants/codexModels";
 
 const AGENT_STEPS = {
   cursor: [
@@ -64,8 +65,6 @@ function connectionErrorMessage(error) {
   return message;
 }
 
-const CODEX_MODEL_OPTIONS = ["gpt-5.4", "gpt-5.5"];
-
 export default function AgentSetupWizard({
   agent,
   setupStatus,
@@ -76,10 +75,11 @@ export default function AgentSetupWizard({
 }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [localStatus, setLocalStatus] = useState(setupStatus || null);
-  const [selectedModel, setSelectedModel] = useState(agentConfig?.settings?.model || "gpt-5.4");
+  const [selectedModel, setSelectedModel] = useState(agentConfig?.settings?.model || DEFAULT_CODEX_MODEL);
   const [checking, setChecking] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [error, setError] = useState("");
+  const [completed, setCompleted] = useState(false);
   const info = (localStatus || setupStatus)?.[agent];
   const steps = AGENT_STEPS[agent] || [];
   const step = steps[stepIndex] || steps[0];
@@ -89,8 +89,9 @@ export default function AgentSetupWizard({
   async function runCheck() {
     setChecking(true);
     setError("");
+    setCompleted(false);
     try {
-      const nextStatus = await api.getSetupStatus();
+      const nextStatus = await api.refreshSetupStatus();
       setLocalStatus(nextStatus);
       if (onRefresh) await onRefresh();
       const nextInfo = nextStatus?.[agent];
@@ -104,6 +105,19 @@ export default function AgentSetupWizard({
         setStepIndex((current) => current + 1);
       } else if (nextInfo?.status !== "ready") {
         throw new Error(nextInfo?.message || `${agentName} is not ready.`);
+      } else if (onSaveAgentConfig) {
+        const settings = agent === "codex"
+          ? { configured: true, model: selectedModel }
+          : { configured: true };
+        await onSaveAgentConfig(agent, settings);
+        setLocalStatus((current) => ({
+          ...(current || nextStatus),
+          [agent]: {
+            ...(current || nextStatus)?.[agent],
+            configured: true,
+          },
+        }));
+        setCompleted(true);
       }
     } catch (err) {
       setError(connectionErrorMessage(err));
@@ -152,9 +166,17 @@ export default function AgentSetupWizard({
           ))}
         </ol>
 
-        <div className={`agent-current-status ${info?.status || "unknown"}`}>
-          <strong>{info?.status === "ready" ? "Ready" : info?.status || "Not checked"}</strong>
-          <span>{info?.version ? `Version: ${info.version}` : statusText(info)}</span>
+        <div className={`agent-current-status ${info?.configured === false ? "needs_setup" : info?.status || "unknown"}`}>
+          <strong>
+            {info?.configured === false
+              ? "Needs setup"
+              : info?.status === "ready" ? "Ready" : info?.status || "Not checked"}
+          </strong>
+          <span>
+            {info?.configured === false
+              ? `${agentName} must be configured in AgentBridge.`
+              : info?.version ? `Version: ${info.version}` : statusText(info)}
+          </span>
         </div>
 
         {agent === "codex" && (
@@ -164,8 +186,8 @@ export default function AgentSetupWizard({
             <div className="wizard-form-row">
               <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>
                 {CODEX_MODEL_OPTIONS.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
+                  <option key={model.value} value={model.value}>
+                    {model.label}
                   </option>
                 ))}
               </select>
@@ -173,7 +195,7 @@ export default function AgentSetupWizard({
                 type="button"
                 className="btn primary"
                 onClick={saveCodexModel}
-                disabled={savingModel || selectedModel === (agentConfig?.settings?.model || "gpt-5.4")}
+                disabled={savingModel || selectedModel === (agentConfig?.settings?.model || DEFAULT_CODEX_MODEL)}
               >
                 {savingModel ? "Saving..." : "Save model"}
               </button>
@@ -190,14 +212,23 @@ export default function AgentSetupWizard({
         )}
 
         {error && <div className="alert error">{error}</div>}
+        {completed && (
+          <div className="success-box">
+            {agentName} configuration saved. You can close this wizard.
+          </div>
+        )}
 
         <div className="agent-wizard-actions">
           {stepIndex > 0 && <button type="button" className="btn" onClick={goBack}>Back</button>}
           <button type="button" className="btn" onClick={onClose}>
             Done
           </button>
-          <button type="button" className="btn primary" onClick={runCheck} disabled={checking}>
-            {checking ? "Checking..." : stepIndex === steps.length - 1 ? "Re-check" : "Next"}
+          <button type="button" className="btn primary" onClick={runCheck} disabled={checking || completed}>
+            {checking
+              ? "Checking..."
+              : completed
+                ? "Configured"
+                : stepIndex === steps.length - 1 ? "Save configuration" : "Next"}
           </button>
         </div>
       </div>

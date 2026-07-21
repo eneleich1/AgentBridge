@@ -2,6 +2,8 @@ const { createCursorAgent } = require("./cursorAgent");
 const { createCodexAgent } = require("./codexAgent");
 const { readJsonConfig, writeJsonConfig } = require("../utils/runtimeConfig");
 
+const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+
 const DEFAULT_CONFIG = {
   agents: [
     {
@@ -9,7 +11,9 @@ const DEFAULT_CONFIG = {
       name: "Cursor Agent",
       description: "Cursor Agent CLI",
       enabled: true,
-      settings: {},
+      settings: {
+        configured: false,
+      },
     },
     {
       id: "codex",
@@ -17,11 +21,12 @@ const DEFAULT_CONFIG = {
       description: "OpenAI Codex CLI",
       enabled: true,
       settings: {
-        model: "gpt-5.4",
+        configured: false,
+        model: DEFAULT_CODEX_MODEL,
       },
     },
   ],
-  maxConcurrency: 1,
+  maxConcurrency: 2,
   accessToken: "",
 };
 
@@ -45,7 +50,7 @@ function getAgent(agentType) {
     return createCursorAgent();
   }
   if (agentType === "codex") {
-    return createCodexAgent({ model: meta.settings?.model || "gpt-5.4" });
+    return createCodexAgent({ model: meta.settings?.model || DEFAULT_CODEX_MODEL });
   }
 
   throw new Error(`Unknown agent type: ${agentType}`);
@@ -58,7 +63,7 @@ function listAgents() {
 
 function getMaxConcurrency() {
   const config = loadAgentsConfig();
-  return config.maxConcurrency || 1;
+  return Math.max(1, Number(config.maxConcurrency) || DEFAULT_CONFIG.maxConcurrency);
 }
 
 function getAccessToken() {
@@ -78,9 +83,18 @@ function getAgentConfig(agentType) {
     id: meta.id,
     name: meta.name,
     settings: {
+      configured: meta.settings?.configured !== false,
       ...(meta.settings || {}),
     },
   };
+}
+
+function isAgentConfigured(agentType) {
+  const config = loadAgentsConfig();
+  const meta = config.agents.find((a) => a.id === agentType);
+
+  if (!meta) return false;
+  return meta.settings?.configured !== false;
 }
 
 function updateAgentConfig(agentType, nextSettings = {}) {
@@ -93,19 +107,41 @@ function updateAgentConfig(agentType, nextSettings = {}) {
 
   const meta = config.agents[index];
   const currentSettings = meta.settings || {};
+  const hasConfigured = typeof nextSettings.configured === "boolean";
 
   if (agentType === "codex") {
-    const model = String(nextSettings.model || "").trim() || "gpt-5.4";
+    const model = Object.hasOwn(nextSettings, "model")
+      ? String(nextSettings.model || "").trim() || DEFAULT_CODEX_MODEL
+      : currentSettings.model || DEFAULT_CODEX_MODEL;
     meta.settings = {
       ...currentSettings,
+      ...(hasConfigured ? { configured: nextSettings.configured } : {}),
       model,
     };
   } else {
     meta.settings = {
       ...currentSettings,
+      ...(hasConfigured ? { configured: nextSettings.configured } : {}),
     };
   }
 
+  config.agents[index] = meta;
+  saveAgentsConfig(config);
+  return getAgentConfig(agentType);
+}
+
+function resetAgentConfig(agentType) {
+  const config = loadAgentsConfig();
+  const index = config.agents.findIndex((a) => a.id === agentType);
+
+  if (index < 0) {
+    throw new Error(`Unknown agent type: ${agentType}`);
+  }
+
+  const meta = config.agents[index];
+  meta.settings = agentType === "codex"
+    ? { configured: false, model: DEFAULT_CODEX_MODEL }
+    : { configured: false };
   config.agents[index] = meta;
   saveAgentsConfig(config);
   return getAgentConfig(agentType);
@@ -117,5 +153,7 @@ module.exports = {
   getMaxConcurrency,
   getAccessToken,
   getAgentConfig,
+  isAgentConfigured,
   updateAgentConfig,
+  resetAgentConfig,
 };

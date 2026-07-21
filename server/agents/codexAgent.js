@@ -289,7 +289,7 @@ function createJsonlParser({ onEvent, onText, onRaw }) {
  * session id and resume it on later turns instead of replaying chat history.
  */
 function createCodexAgent(options = {}) {
-  const model = options.model || "gpt-5.4";
+  const model = options.model || "gpt-5.6-sol";
 
   return {
     id: "codex",

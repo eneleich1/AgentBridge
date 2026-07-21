@@ -14,15 +14,17 @@ class AgentSession {
     this.abortController = null;
   }
 
-  async sendMessage(userMessage, attachments = []) {
+  async sendMessage(userMessage, attachments = [], queuedAgentMessage = null) {
     const sessionId = this.session.id;
-    const agentMessage = this.manager.createMessage({
-      sessionId,
-      role: "agent",
-      content: "",
-      raw: "",
-      status: "running",
-    });
+    const agentMessage = queuedAgentMessage
+      ? this.manager.setMessageStatus(queuedAgentMessage.id, "running")
+      : this.manager.createMessage({
+          sessionId,
+          role: "agent",
+          content: "",
+          raw: "",
+          status: "running",
+        });
 
     const terminal = new TerminalBuffer();
     const agent = getAgent(this.session.agentType);

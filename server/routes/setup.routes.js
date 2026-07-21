@@ -3,8 +3,11 @@ const setupService = require("../services/setupService");
 async function setupRoutes(fastify) {
   fastify.get("/api/health", async () => setupService.getHealth());
 
-  fastify.get("/api/setup/status", async () => {
-    return setupService.getSetupStatus();
+  fastify.get("/api/setup/status", async (request) => {
+    const refresh = String(request.query?.refresh || "").toLowerCase();
+    return setupService.getSetupStatus({
+      forceRefresh: refresh === "1" || refresh === "true",
+    });
   });
 
   fastify.post("/api/connections/test", async () => {

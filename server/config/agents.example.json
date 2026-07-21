@@ -5,7 +5,9 @@
       "name": "Cursor Agent",
       "description": "Cursor Agent CLI",
       "enabled": true,
-      "settings": {}
+      "settings": {
+        "configured": false
+      }
     },
     {
       "id": "codex",
@@ -13,10 +15,11 @@
       "description": "OpenAI Codex CLI",
       "enabled": true,
       "settings": {
-        "model": "gpt-5.4"
+        "configured": false,
+        "model": "gpt-5.6-sol"
       }
     }
   ],
-  "maxConcurrency": 1,
+  "maxConcurrency": 2,
   "accessToken": ""
 }

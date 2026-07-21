@@ -1,5 +1,11 @@
-const { getAgentConfig, listAgents, updateAgentConfig } = require("../agents/agentFactory");
+const {
+  getAgentConfig,
+  listAgents,
+  resetAgentConfig,
+  updateAgentConfig,
+} = require("../agents/agentFactory");
 const { getCodexUsage, getCursorUsage } = require("../agents/diagnostics");
+const { invalidateSetupStatusCache } = require("../services/setupService");
 
 async function agentsRoutes(fastify) {
   fastify.get("/api/agents", async () => {
@@ -17,6 +23,18 @@ async function agentsRoutes(fastify) {
   fastify.put("/api/agents/:id/config", async (request, reply) => {
     try {
       const agent = updateAgentConfig(request.params.id, request.body || {});
+      invalidateSetupStatusCache();
+      return { agent };
+    } catch (error) {
+      const statusCode = error.message.includes("Unknown agent type") ? 404 : 400;
+      return reply.code(statusCode).send({ error: error.message });
+    }
+  });
+
+  fastify.delete("/api/agents/:id/config", async (request, reply) => {
+    try {
+      const agent = resetAgentConfig(request.params.id);
+      invalidateSetupStatusCache();
       return { agent };
     } catch (error) {
       const statusCode = error.message.includes("Unknown agent type") ? 404 : 400;

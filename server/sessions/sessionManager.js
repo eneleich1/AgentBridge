@@ -56,6 +56,7 @@ class SessionManager {
         raw TEXT DEFAULT '',
         attachments TEXT DEFAULT '[]',
         status TEXT NOT NULL,
+        reply_to_message_id TEXT,
         error_type TEXT,
         user_message TEXT,
         technical_message TEXT,
@@ -64,6 +65,11 @@ class SessionManager {
       );
     `);
     this.ensureColumn("sessions", "native_session_id", "TEXT");
+    this.ensureColumn("session_messages", "reply_to_message_id", "TEXT");
+    this.restorePendingQueue();
+    if (this.queue.length > 0) {
+      setImmediate(() => this.processQueue());
+    }
   }
 
   ensureColumn(table, column, definition) {
@@ -103,6 +109,7 @@ class SessionManager {
       attachments: this.parseJson(row.attachments, []),
       createdAt: row.created_at,
       status: row.status,
+      replyToMessageId: row.reply_to_message_id || null,
       error: row.error_type
         ? {
             type: row.error_type,
@@ -230,7 +237,16 @@ class SessionManager {
     return this.getSessionById(sessionId);
   }
 
-  createMessage({ sessionId, role, content, raw, attachments = [], status = "completed", error = null }) {
+  createMessage({
+    sessionId,
+    role,
+    content,
+    raw,
+    attachments = [],
+    status = "completed",
+    replyToMessageId = null,
+    error = null,
+  }) {
     const message = {
       id: uuidv4(),
       sessionId,
@@ -239,6 +255,7 @@ class SessionManager {
       raw: raw || "",
       attachments,
       status,
+      replyToMessageId,
       createdAt: this.now(),
       errorType: error?.type || null,
       userMessage: error?.userMessage || null,
@@ -248,10 +265,10 @@ class SessionManager {
 
     this.db.prepare(`
       INSERT INTO session_messages (
-        id, session_id, role, content, raw, attachments, status,
+        id, session_id, role, content, raw, attachments, status, reply_to_message_id,
         error_type, user_message, technical_message, fix_steps, created_at
       ) VALUES (
-        @id, @sessionId, @role, @content, @raw, @attachments, @status,
+        @id, @sessionId, @role, @content, @raw, @attachments, @status, @replyToMessageId,
         @errorType, @userMessage, @technicalMessage, @fixSteps, @createdAt
       )
     `).run({
@@ -269,12 +286,14 @@ class SessionManager {
   }
 
   getMessageRowById(messageId) {
-    return this.db.prepare("SELECT * FROM session_messages WHERE id = ?").get(messageId);
+    return this.db
+      .prepare("SELECT rowid AS db_rowid, * FROM session_messages WHERE id = ?")
+      .get(messageId);
   }
 
   listMessages(sessionId) {
     const rows = this.db
-      .prepare("SELECT * FROM session_messages WHERE session_id = ? ORDER BY created_at ASC")
+      .prepare("SELECT * FROM session_messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC")
       .all(sessionId);
     return rows.map((row) => this.rowToMessage(row));
   }
@@ -285,7 +304,7 @@ class SessionManager {
           .prepare(`
             SELECT * FROM session_messages
             WHERE session_id = ? AND id != ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, rowid DESC
             LIMIT ?
           `)
           .all(sessionId, excludeMessageId, limit)
@@ -293,7 +312,7 @@ class SessionManager {
           .prepare(`
             SELECT * FROM session_messages
             WHERE session_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, rowid DESC
             LIMIT ?
           `)
           .all(sessionId, limit);
@@ -306,7 +325,7 @@ class SessionManager {
       .prepare(`
         SELECT * FROM session_messages
         WHERE session_id = ? AND role = 'agent' AND content != ''
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT ?
       `)
       .all(sessionId, limit);
@@ -362,6 +381,148 @@ class SessionManager {
     return this.getMessageById(messageId);
   }
 
+  setMessageStatus(messageId, status) {
+    this.db.prepare(`
+      UPDATE session_messages SET
+        status = ?,
+        error_type = NULL,
+        user_message = NULL,
+        technical_message = NULL,
+        fix_steps = '[]'
+      WHERE id = ?
+    `).run(status, messageId);
+    return this.getMessageById(messageId);
+  }
+
+  createQueuedAgentMessage(sessionId, userMessageId) {
+    return this.createMessage({
+      sessionId,
+      role: "agent",
+      content: "",
+      raw: "",
+      status: "queued",
+      replyToMessageId: userMessageId,
+    });
+  }
+
+  restorePendingQueue() {
+    const interruptedRows = this.db.prepare(`
+      SELECT * FROM session_messages
+      WHERE role = 'agent' AND status = 'running'
+      ORDER BY created_at ASC, rowid ASC
+    `).all();
+
+    for (const row of interruptedRows) {
+      this.finishAgentMessage(row.id, {
+        content: row.content || "La tarea se interrumpió porque se reinició AgentBridge.",
+        raw: row.raw || "AgentBridge restarted while this task was running.",
+        status: "failed",
+        error: {
+          type: "backend_restarted",
+          userMessage: "La tarea se interrumpió porque se reinició AgentBridge. Puedes volver a enviarla.",
+          technicalMessage: "The backend restarted while the agent process was active.",
+          fixSteps: ["Revisa el trabajo parcial y vuelve a enviar la instrucción."],
+        },
+      });
+    }
+
+    if (interruptedRows.length > 0) {
+      const timestamp = this.now();
+      this.db.prepare(`
+        UPDATE sessions SET
+          status = 'failed',
+          process_id = NULL,
+          updated_at = ?,
+          last_activity_at = ?
+        WHERE status = 'running'
+      `).run(timestamp, timestamp);
+    }
+
+    const queuedRows = this.db.prepare(`
+      SELECT * FROM session_messages
+      WHERE role = 'agent' AND status = 'queued'
+      ORDER BY created_at ASC, rowid ASC
+    `).all();
+
+    for (const row of queuedRows) {
+      const userRow = row.reply_to_message_id
+        ? this.getMessageRowById(row.reply_to_message_id)
+        : this.db.prepare(`
+            SELECT * FROM session_messages
+            WHERE session_id = ? AND role = 'user' AND created_at <= ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+          `).get(row.session_id, row.created_at);
+      if (!userRow) {
+        this.finishAgentMessage(row.id, {
+          content: "No se encontró la instrucción asociada a esta tarea en cola.",
+          raw: "Queued task has no associated user message.",
+          status: "failed",
+          error: {
+            type: "invalid_queue_entry",
+            userMessage: "No se pudo recuperar esta tarea en cola.",
+            technicalMessage: "Queued agent message has no associated user message.",
+            fixSteps: ["Vuelve a enviar la instrucción."],
+          },
+        });
+        continue;
+      }
+      this.queue.push({
+        sessionId: row.session_id,
+        messageId: userRow.id,
+        agentMessageId: row.id,
+        attachments: this.parseJson(userRow.attachments, []),
+      });
+      this.updateSession(row.session_id, {
+        status: "queued",
+        processId: null,
+        lastActivityAt: this.now(),
+      });
+    }
+
+    const legacySessions = this.db.prepare(`
+      SELECT s.*
+      FROM sessions s
+      WHERE s.status IN ('ready', 'queued')
+        AND NOT EXISTS (
+          SELECT 1 FROM session_messages pending
+          WHERE pending.session_id = s.id
+            AND pending.role = 'agent'
+            AND pending.status = 'queued'
+        )
+        AND (
+          SELECT latest.role
+          FROM session_messages latest
+          WHERE latest.session_id = s.id
+          ORDER BY latest.created_at DESC, latest.rowid DESC
+          LIMIT 1
+        ) = 'user'
+    `).all();
+
+    for (const sessionRow of legacySessions) {
+      const userRow = this.db.prepare(`
+        SELECT * FROM session_messages
+        WHERE session_id = ? AND role = 'user'
+            ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+      `).get(sessionRow.id);
+      if (!userRow || this.queue.some((entry) => entry.messageId === userRow.id)) continue;
+
+      const queuedMessage = this.createQueuedAgentMessage(sessionRow.id, userRow.id);
+      this.queue.push({
+        sessionId: sessionRow.id,
+        messageId: userRow.id,
+        agentMessageId: queuedMessage.id,
+        attachments: this.parseJson(userRow.attachments, []),
+      });
+      this.updateSession(sessionRow.id, {
+        status: "queued",
+        processId: null,
+        lastActivityAt: this.now(),
+      });
+    }
+  }
+
   async enqueueMessage(sessionId, { content, attachments = [] }) {
     const session = this.getSessionById(sessionId);
     if (!session) {
@@ -372,7 +533,15 @@ class SessionManager {
       throw new Error("Message content or attachments are required");
     }
 
-    this.assertProjectLock(session);
+    const alreadyQueued = this.queue.some((entry) => entry.sessionId === sessionId);
+    if (
+      this.activeRuns.has(sessionId) ||
+      session.status === "running" ||
+      session.status === "queued" ||
+      alreadyQueued
+    ) {
+      throw new Error("This session already has a message running or queued.");
+    }
 
     const userMessageId = uuidv4();
     const savedAttachments = attachmentService.saveTaskAttachments(userMessageId, attachments);
@@ -385,14 +554,24 @@ class SessionManager {
       attachments: savedAttachments,
       status: "completed",
     });
+    const queuedMessage = this.createQueuedAgentMessage(sessionId, message.id);
 
     this.appendSessionLog(sessionId, "system", `User: ${promptText}\n`);
-    this.emitSessionEvent("message_added", sessionId, { message });
-
-    this.queue.push({ sessionId, messageId: message.id, attachments: savedAttachments });
+    this.queue.push({
+      sessionId,
+      messageId: message.id,
+      agentMessageId: queuedMessage.id,
+      attachments: savedAttachments,
+    });
+    const queuedSession = this.updateSession(sessionId, {
+      status: "queued",
+      lastActivityAt: this.now(),
+    });
+    this.emitSessionEvent("message_added", sessionId, { message }, queuedSession);
+    this.emitSessionEvent("message_added", sessionId, { message: queuedMessage }, queuedSession);
     this.processQueue();
 
-    return { messageId: message.id, status: "queued" };
+    return { messageId: message.id, queuedMessageId: queuedMessage.id, status: "queued" };
   }
 
   async reviseAndReplayMessage(sessionId, messageId, { content }) {
@@ -417,8 +596,8 @@ class SessionManager {
     this.queue = this.queue.filter((entry) => entry.sessionId !== sessionId);
     this.db.prepare(`
       DELETE FROM session_messages
-      WHERE session_id = ? AND created_at > ?
-    `).run(sessionId, row.created_at);
+      WHERE session_id = ? AND rowid > ?
+    `).run(sessionId, row.db_rowid);
 
     this.db.prepare(`
       UPDATE session_messages SET
@@ -433,7 +612,7 @@ class SessionManager {
     `).run(promptText, promptText, messageId);
 
     const updatedSession = this.updateSession(sessionId, {
-      status: "ready",
+      status: "queued",
       nativeSessionId: null,
       sessionMode: session.agentType === "codex" ? "context-replay" : session.sessionMode,
       lastActivityAt: this.now(),
@@ -441,6 +620,7 @@ class SessionManager {
     this.runtimeSessions.delete(sessionId);
     const message = this.getMessageById(messageId);
     const attachments = message.attachments || [];
+    const queuedMessage = this.createQueuedAgentMessage(sessionId, messageId);
 
     this.appendSessionLog(sessionId, "system", `Edited user message: ${promptText}\n`);
     this.emitSessionEvent("session_rewound", sessionId, {
@@ -448,7 +628,12 @@ class SessionManager {
       messages: this.listMessages(sessionId),
     }, updatedSession);
 
-    this.queue.push({ sessionId, messageId, attachments });
+    this.queue.push({
+      sessionId,
+      messageId,
+      agentMessageId: queuedMessage.id,
+      attachments,
+    });
     this.processQueue();
 
     return {
@@ -482,17 +667,19 @@ class SessionManager {
     }
   }
 
-  assertProjectLock(session) {
-    const lockedBy = this.projectLocks.get(session.projectId);
-    if (session.mode === "execute" && lockedBy && lockedBy !== session.id) {
-      throw new Error("Another write session is already running for this project.");
-    }
-  }
-
   async processQueue() {
     const maxActiveSessions = getMaxConcurrency() || this.maxActiveSessions;
     while (this.activeRuns.size < maxActiveSessions && this.queue.length > 0) {
-      const next = this.queue.shift();
+      const runnableIndex = this.queue.findIndex((entry) => {
+        const session = this.getSessionById(entry.sessionId);
+        if (!session) return true;
+        if (this.activeRuns.has(session.id)) return false;
+        const lockedBy = this.projectLocks.get(session.projectId);
+        return session.mode !== "execute" || !lockedBy || lockedBy === session.id;
+      });
+      if (runnableIndex < 0) return;
+
+      const [next] = this.queue.splice(runnableIndex, 1);
       this.runQueuedMessage(next).catch(() => {
         // Errors are converted into failed messages inside the session runner.
       });
@@ -507,7 +694,11 @@ class SessionManager {
     this.runtimeSessions.set(session.id, runtime);
 
     try {
-      await runtime.sendMessage(this.getMessageById(entry.messageId), entry.attachments);
+      await runtime.sendMessage(
+        this.getMessageById(entry.messageId),
+        entry.attachments,
+        entry.agentMessageId ? this.getMessageById(entry.agentMessageId) : null
+      );
     } finally {
       this.activeRuns.delete(session.id);
       this.unlockProject(this.getSessionById(session.id));
@@ -566,17 +757,30 @@ class SessionManager {
     const session = this.getSessionById(sessionId);
     if (!session) return null;
 
-    const runtime = this.runtimeSessions.get(sessionId);
+    const isActive = this.activeRuns.has(sessionId);
+    const runtime = isActive ? this.runtimeSessions.get(sessionId) : null;
     if (runtime) {
       runtime.cancel();
     }
 
+    const queuedEntries = this.queue.filter((entry) => entry.sessionId === sessionId);
     this.queue = this.queue.filter((entry) => entry.sessionId !== sessionId);
-    this.updateSession(sessionId, {
-      status: runtime ? "running" : "ready",
+    for (const entry of queuedEntries) {
+      if (!entry.agentMessageId) continue;
+      const cancelledMessage = this.finishAgentMessage(entry.agentMessageId, {
+        content: "Tarea cancelada antes de comenzar.",
+        raw: "Task cancelled while queued.",
+        status: "cancelled",
+        error: null,
+      });
+      this.emitSessionEvent("message_updated", sessionId, { message: cancelledMessage });
+    }
+    const updated = this.updateSession(sessionId, {
+      status: isActive ? "running" : "ready",
       lastActivityAt: this.now(),
     });
-    return this.getSessionById(sessionId);
+    this.emitSessionEvent("session_cancelled", sessionId, {}, updated);
+    return updated;
   }
 }
 

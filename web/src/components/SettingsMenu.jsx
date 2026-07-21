@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 function statusText(info) {
   if (!info) return "Not checked";
+  if (info.configured === false) return "Needs setup";
   if (info.status === "ready") return "Ready";
   if (info.status === "missing") return "Missing";
   if (info.status === "needs_login") return "Needs login";
@@ -86,8 +87,20 @@ export default function SettingsMenu({
   onDefaultAgentChange,
   onThemeChange,
   onConfigureAgent,
+  onDeleteAgentConfig,
   onClose,
 }) {
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteNotice, setDeleteNotice] = useState("");
+  const [deletingAgent, setDeletingAgent] = useState(false);
+  const selectedAgentName = defaultAgent === "codex" ? "Codex CLI" : "Cursor Agent";
+  const selectedAgentStatus = setupStatus?.[defaultAgent];
+  const selectedAgentConfigured = selectedAgentStatus?.configured === true;
+
+  useEffect(() => {
+    setDeleteError("");
+    setDeleteNotice("");
+  }, [defaultAgent]);
   const popoverStyle = useMemo(() => {
     if (!anchorRect || typeof window === "undefined") return undefined;
     const panelWidth = 360;
@@ -105,6 +118,27 @@ export default function SettingsMenu({
       bottom: "auto",
     };
   }, [anchorRect]);
+
+  async function handleDeleteAgentConfig() {
+    if (!onDeleteAgentConfig || !selectedAgentConfigured) return;
+    const confirmed = window.confirm(
+      `Delete the ${selectedAgentName} configuration from AgentBridge? ` +
+      "This will not uninstall the CLI or sign out of its account."
+    );
+    if (!confirmed) return;
+
+    setDeletingAgent(true);
+    setDeleteError("");
+    setDeleteNotice("");
+    try {
+      await onDeleteAgentConfig(defaultAgent);
+      setDeleteNotice(`${selectedAgentName} configuration deleted. Setup is required before using it again.`);
+    } catch (error) {
+      setDeleteError(String(error?.message || error));
+    } finally {
+      setDeletingAgent(false);
+    }
+  }
 
   return (
     <div className="settings-popover" role="dialog" aria-label="Settings" style={popoverStyle}>
@@ -160,30 +194,31 @@ export default function SettingsMenu({
           <small>{setupStatus?.setupComplete ? "Connected" : "Needs setup"}</small>
         </button>
 
-        <button type="button" className="settings-menu-item" onClick={() => onConfigureAgent("cursor")}>
-          <span>Configure Cursor Agent</span>
-          <small>{statusText(setupStatus?.cursor)}</small>
-        </button>
-        <UsageDisclosure
-          agentId="cursor"
-          usage={agentUsage?.cursor}
-          loading={agentUsageLoading?.cursor}
-          onRefresh={() => onRefreshUsage("cursor")}
-        />
-
-        <button type="button" className="settings-menu-item" onClick={() => onConfigureAgent("codex")}>
-          <span>Configure Codex CLI</span>
+        <button type="button" className="settings-menu-item" onClick={() => onConfigureAgent(defaultAgent)}>
+          <span>Configure {selectedAgentName}</span>
           <small>
-            {statusText(setupStatus?.codex)}
-            {codexModel ? ` - Model: ${codexModel}` : ""}
+            {statusText(selectedAgentStatus)}
+            {defaultAgent === "codex" && codexModel ? ` - Model: ${codexModel}` : ""}
           </small>
         </button>
         <UsageDisclosure
-          agentId="codex"
-          usage={agentUsage?.codex}
-          loading={agentUsageLoading?.codex}
-          onRefresh={() => onRefreshUsage("codex")}
+          agentId={defaultAgent}
+          usage={agentUsage?.[defaultAgent]}
+          loading={agentUsageLoading?.[defaultAgent]}
+          onRefresh={() => onRefreshUsage(defaultAgent)}
         />
+
+        <button
+          type="button"
+          className="settings-menu-item settings-menu-item-danger"
+          onClick={handleDeleteAgentConfig}
+          disabled={deletingAgent || !selectedAgentConfigured}
+        >
+          <span>{deletingAgent ? "Deleting configuration..." : `Delete ${selectedAgentName} configuration`}</span>
+          <small>Reset AgentBridge setup for this agent</small>
+        </button>
+        {deleteNotice && <div className="success-box">{deleteNotice}</div>}
+        {deleteError && <div className="alert error">{deleteError}</div>}
       </div>
     </div>
   );

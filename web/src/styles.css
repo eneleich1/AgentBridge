@@ -1458,6 +1458,20 @@ body {
   background: #37373a;
 }
 
+.settings-menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.settings-menu-item-danger {
+  color: #fca5a5;
+}
+
+.settings-menu-item-danger:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(127, 29, 29, 0.22);
+}
+
 .settings-config-list {
   display: grid;
   gap: 0.18rem;
@@ -1667,6 +1681,7 @@ body {
 }
 
 .agent-current-status.missing,
+.agent-current-status.needs_setup,
 .agent-current-status.needs_login,
 .agent-current-status.usage_limit,
 .agent-current-status.blocked {

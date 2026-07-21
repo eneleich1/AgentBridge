@@ -104,6 +104,9 @@ when its process starts.
 ### Select the execution model
 
 The `Execution model` setting controls the model passed to `codex exec`.
+AgentBridge defaults to `gpt-5.6-sol`. The selector also includes
+`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4` so you can choose a
+model supported by your signed-in Codex account.
 
 1. Select a model available to your Codex account.
 2. Select `Save model` if you changed the value.
@@ -113,6 +116,15 @@ The `Execution model` setting controls the model passed to `codex exec`.
 
 If task execution later reports that a model is unavailable, return to this
 screen and select another supported model.
+
+Settings displays configuration and usage only for the currently selected
+default agent. Choose `Cursor` or `Codex`, then use the corresponding
+`Configure` action.
+
+`Delete configuration` resets the selected agent inside AgentBridge and marks
+it as `Needs setup`, so its configuration wizard must be completed again. It
+does not uninstall the Cursor or Codex CLI and does not sign out of the CLI
+account.
 
 ## 3. Register a project
 
@@ -266,16 +278,52 @@ version : 0.1.0
 
 Configure local operation successfully before enabling remote access.
 
-Recommended approaches:
+### Primary phone-access workflow
+
+The primary documented workflow for temporarily opening AgentBridge from a
+phone is a Cloudflare Quick Tunnel. Follow the complete installation and
+startup procedure in the **Remote access** section of
+`1-README-INSTRUCTIONS.md`.
+
+The important sequence is:
+
+1. Run `npm run build:web`.
+2. Run `npm start` so port `3847` serves the interface, API, and WebSocket.
+3. In another terminal, run:
+
+```powershell
+& "$env:LOCALAPPDATA\cloudflared\cloudflared.exe" tunnel --url http://127.0.0.1:3847
+```
+
+4. Open the generated `https://...trycloudflare.com` URL on the phone.
+
+Do not use a single tunnel to port `3847` while following the two-terminal
+development workflow (`npm run dev` plus `npm run dev:web`). In development,
+the interface is on `5173` and the backend is on `3847`. The compiled workflow
+puts everything on `3847` and is why one Cloudflare URL works.
+
+If the Cloudflare URL displays `Route GET:/ not found`, stop the backend, run
+`npm run build:web`, and then restart it with `npm start` before reloading the
+URL.
+
+A Quick Tunnel URL is publicly reachable. The current phone setup screen does
+not provide a first-time token-entry field, so use this workflow only for
+brief, supervised access and stop `cloudflared` when finished. Use the
+protected alternatives below for regular or unattended access.
+
+### Permanent and private alternatives
+
+For stable or longer-running remote access, recommended approaches are:
 
 - Tailscale Serve for private access from your own authorized devices.
-- Cloudflare Tunnel combined with Cloudflare Access for browser-based,
-  identity-protected access.
+- A remotely managed Cloudflare Tunnel combined with Cloudflare Access for
+  browser-based, identity-protected access.
 
 Do not:
 
 - Forward port `3847` directly from a router.
-- Use a public tunnel without an authentication layer.
+- Leave a public Quick Tunnel running unattended or treat it as permanent
+  access.
 - Use Tailscale Funnel for this application unless you have added and verified
   appropriate application-level authentication.
 - Commit access tokens, local configuration, databases, logs, or attachments.

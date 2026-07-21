@@ -423,7 +423,11 @@ export default function ChatMessage({ message, session, running = false, onRepla
       {isRunning && !responseText && (
         <div className="working-indicator">
           <span className="spinner" />
-          <span>{message?.status === "queued" ? "En cola..." : "Trabajando..."}</span>
+          <span>
+            {message?.status === "queued"
+              ? "En cola. Comenzará automáticamente cuando haya capacidad."
+              : "Trabajando..."}
+          </span>
         </div>
       )}
 

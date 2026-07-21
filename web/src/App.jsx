@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./services/api";
 import { connectWebSocket } from "./services/websocket";
+import { DEFAULT_CODEX_MODEL } from "./constants/codexModels";
 import Sidebar from "./components/Sidebar";
 import ChatMessage, { extractDisplayContent } from "./components/ChatMessage";
 import ChatComposer from "./components/ChatComposer";
@@ -42,6 +43,39 @@ function mergeMessageList(current, nextMessage) {
   return [...current, nextMessage];
 }
 
+function isSessionBusy(status) {
+  return status === "queued" || status === "running";
+}
+
+const DEFAULT_AGENT_CONFIGS = {
+  cursor: { id: "cursor", settings: { configured: false } },
+  codex: { id: "codex", settings: { configured: false, model: DEFAULT_CODEX_MODEL } },
+};
+
+function updateSetupAgentConfigured(current, agentId, configured) {
+  if (!current?.[agentId]) return current;
+  const next = {
+    ...current,
+    [agentId]: {
+      ...current[agentId],
+      configured,
+    },
+  };
+  const hasProject = current.checks?.hasProject ?? Boolean(current.projects?.length);
+  const hasReadyAgent = ["cursor", "codex"].some(
+    (id) => next[id]?.configured === true && next[id]?.status === "ready"
+  );
+  return {
+    ...next,
+    setupComplete: hasProject && hasReadyAgent,
+    checks: {
+      ...(current.checks || {}),
+      hasProject,
+      hasReadyAgent,
+    },
+  };
+}
+
 export default function App() {
   const [backendUrl, setBackendUrl] = useState(api.getServerUrl());
   const [sidebarWidth, setSidebarWidth] = useState(api.getSidebarWidth());
@@ -58,7 +92,7 @@ export default function App() {
   const [attachments, setAttachments] = useState([]);
   const [agent, setAgent] = useState(api.getDefaultAgent());
   const [defaultAgent, setDefaultAgentState] = useState(api.getDefaultAgent());
-  const [codexConfig, setCodexConfig] = useState({ settings: { model: "gpt-5.4" } });
+  const [agentConfigs, setAgentConfigs] = useState(DEFAULT_AGENT_CONFIGS);
   const [agentUsage, setAgentUsage] = useState({ cursor: null, codex: null });
   const [agentUsageLoading, setAgentUsageLoading] = useState({ cursor: false, codex: false });
   const [mode, setMode] = useState("ask");
@@ -79,6 +113,8 @@ export default function App() {
 
   const selectedSessionIdRef = useRef(null);
   const sessionRequestIdRef = useRef(0);
+  const sessionSelectionRequestRef = useRef(0);
+  const sessionDraftsRef = useRef(new Map());
   const pendingOutputRef = useRef(new Map());
   const outputFlushTimerRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -120,18 +156,22 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [healthRes, setupRes, projectsRes, sessionsRes, codexConfigRes] = await Promise.all([
+      const [healthRes, setupRes, projectsRes, sessionsRes, cursorConfigRes, codexConfigRes] = await Promise.all([
         api.getHealth(),
         api.getSetupStatus(),
         api.getProjects(),
         api.getSessions(),
+        api.getAgentConfig("cursor"),
         api.getAgentConfig("codex"),
       ]);
       setHealth(healthRes);
       setSetupStatus(setupRes);
       setProjects(projectsRes.projects || []);
       setSessions((sessionsRes.sessions || []).map((session) => buildSessionPreview(session)));
-      setCodexConfig(codexConfigRes.agent || { settings: { model: "gpt-5.4" } });
+      setAgentConfigs({
+        cursor: cursorConfigRes.agent || DEFAULT_AGENT_CONFIGS.cursor,
+        codex: codexConfigRes.agent || DEFAULT_AGENT_CONFIGS.codex,
+      });
 
       if (projectsRes.projects?.length) {
         const hasSelectedProject =
@@ -214,6 +254,17 @@ export default function App() {
   }, [systemMetricsVisible, wsStatus, backendUrl]);
 
   function resetDraft(projectId) {
+    const currentSessionId = selectedSessionIdRef.current;
+    if (currentSessionId) {
+      if (prompt.trim() || attachments.length > 0) {
+        sessionDraftsRef.current.set(currentSessionId, { prompt, attachments });
+      } else {
+        sessionDraftsRef.current.delete(currentSessionId);
+      }
+    }
+    flushPendingAgentOutput();
+    sessionRequestIdRef.current += 1;
+    sessionSelectionRequestRef.current += 1;
     const pid = projectId || selectedProjectId;
     if (pid) setSelectedProjectId(pid);
     selectedSessionIdRef.current = null;
@@ -294,7 +345,7 @@ export default function App() {
         });
         if (msg.session.id === selectedSessionIdRef.current) {
           setActiveSession(msg.session);
-          setRunning(msg.session.status === "running");
+          setRunning(isSessionBusy(msg.session.status));
         }
       }
 
@@ -310,6 +361,12 @@ export default function App() {
                 : session
             )
           );
+        }
+      }
+
+      if (msg.type === "message_updated" && msg.payload?.message) {
+        if (msg.sessionId === selectedSessionIdRef.current) {
+          setMessages((prev) => mergeMessageList(prev, msg.payload.message));
         }
       }
 
@@ -441,23 +498,60 @@ export default function App() {
   }
 
   async function handleSelectSession(sessionId) {
+    const currentSessionId = selectedSessionIdRef.current;
+    if (currentSessionId) {
+      if (prompt.trim() || attachments.length > 0) {
+        sessionDraftsRef.current.set(currentSessionId, { prompt, attachments });
+      } else {
+        sessionDraftsRef.current.delete(currentSessionId);
+      }
+    }
+    flushPendingAgentOutput();
+    sessionRequestIdRef.current += 1;
+    const selectionRequestId = sessionSelectionRequestRef.current + 1;
+    sessionSelectionRequestRef.current = selectionRequestId;
     selectedSessionIdRef.current = sessionId;
     setSelectedSessionId(sessionId);
     setIsDraft(false);
     setError("");
-    setAttachments([]);
+    setLiveReply(null);
+    setMessages([]);
+
+    const savedDraft = sessionDraftsRef.current.get(sessionId);
+    setPrompt(savedDraft?.prompt || "");
+    setAttachments(savedDraft?.attachments || []);
+
+    const preview = sessions.find((session) => session.id === sessionId);
+    if (preview) {
+      setActiveSession(preview);
+      setRunning(isSessionBusy(preview.status));
+      setSelectedProjectId(preview.projectId || selectedProjectId);
+      setAgent(preview.agentType || agent);
+      setMode(preview.mode || "ask");
+    }
+
     try {
       const { session } = await api.getSession(sessionId);
+      if (
+        selectionRequestId !== sessionSelectionRequestRef.current ||
+        selectedSessionIdRef.current !== sessionId
+      ) {
+        return;
+      }
       setActiveSession(session);
       setMessages(session.messages || []);
-      setLiveReply(null);
       setSelectedProjectId(session.projectId || selectedProjectId);
-      setRunning(session.status === "running");
+      setRunning(isSessionBusy(session.status));
       setAgent(session.agentType || agent);
       setMode(session.mode || "ask");
       setMobileMenuOpen(false);
     } catch (err) {
-      setError(err.message);
+      if (
+        selectionRequestId === sessionSelectionRequestRef.current &&
+        selectedSessionIdRef.current === sessionId
+      ) {
+        setError(err.message);
+      }
     }
   }
 
@@ -500,6 +594,7 @@ export default function App() {
       return;
     }
 
+    const originalPrompt = prompt;
     const text = buildPrompt(mode, prompt.trim());
     const outgoingAttachments = attachments;
     const requestId = sessionRequestIdRef.current + 1;
@@ -520,23 +615,29 @@ export default function App() {
           mode,
         });
         session = created.session;
-        selectedSessionIdRef.current = session.id;
-        setSelectedSessionId(session.id);
-        setActiveSession(session);
         setSessions((prev) => [buildSessionPreview(session), ...prev.filter((item) => item.id !== session.id)]);
+        if (
+          sessionRequestIdRef.current === requestId &&
+          selectedSessionIdRef.current === null
+        ) {
+          selectedSessionIdRef.current = session.id;
+          setSelectedSessionId(session.id);
+          setActiveSession(session);
+        }
       }
 
       await api.createSessionMessage(session.id, {
         content: text,
         attachments: outgoingAttachments,
       });
+      sessionDraftsRef.current.delete(session.id);
     } catch (err) {
       if (sessionRequestIdRef.current === requestId) {
         setRunning(false);
-        setPrompt(prompt);
+        setPrompt(originalPrompt);
         setAttachments(outgoingAttachments);
+        setError(err.message);
       }
-      setError(err.message);
     }
   }
 
@@ -646,19 +747,30 @@ export default function App() {
 
   async function handleSaveAgentConfig(agentId, settings) {
     const { agent: updatedAgent } = await api.updateAgentConfig(agentId, settings);
-    if (agentId === "codex") {
-      setCodexConfig(updatedAgent);
-    }
+    setAgentConfigs((current) => ({ ...current, [agentId]: updatedAgent }));
+    setSetupStatus((current) => updateSetupAgentConfigured(
+      current,
+      agentId,
+      updatedAgent.settings?.configured === true
+    ));
     await refresh();
     return updatedAgent;
+  }
+
+  async function handleDeleteAgentConfig(agentId) {
+    const { agent: resetAgent } = await api.deleteAgentConfig(agentId);
+    setAgentConfigs((current) => ({ ...current, [agentId]: resetAgent }));
+    setSetupStatus((current) => updateSetupAgentConfigured(current, agentId, false));
+    await refresh();
+    return resetAgent;
   }
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const currentSession = activeSession || null;
   const composerBlocked =
     !selectedProjectId ||
-    (agent === "cursor" && setupStatus?.cursor?.status !== "ready") ||
-    (agent === "codex" && setupStatus?.codex?.status !== "ready");
+    setupStatus?.[agent]?.configured !== true ||
+    setupStatus?.[agent]?.status !== "ready";
 
   const mobileHeaderTitle = selectedProject?.name || "AgentBridge";
   const mobileHeaderSubtitle = `${(currentSession?.agentType || agent) === "cursor" ? "Cursor" : "Codex"} / ${health?.hostname || "desktop"} / ${currentSession?.mode || mode}`;
@@ -816,7 +928,7 @@ export default function App() {
           anchorRect={settingsAnchor}
           setupStatus={setupStatus}
           defaultAgent={defaultAgent}
-          codexModel={codexConfig?.settings?.model || "gpt-5.4"}
+          codexModel={agentConfigs.codex?.settings?.model || DEFAULT_CODEX_MODEL}
           agentUsage={agentUsage}
           agentUsageLoading={agentUsageLoading}
           theme={theme}
@@ -832,6 +944,7 @@ export default function App() {
             setSettingsOpen(false);
             openAgentWizard(nextAgent);
           }}
+          onDeleteAgentConfig={handleDeleteAgentConfig}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -862,7 +975,7 @@ export default function App() {
         <AgentSetupWizard
           agent={agentWizard}
           setupStatus={setupStatus}
-          agentConfig={agentWizard === "codex" ? codexConfig : null}
+          agentConfig={agentConfigs[agentWizard] || DEFAULT_AGENT_CONFIGS[agentWizard]}
           onRefresh={refresh}
           onSaveAgentConfig={handleSaveAgentConfig}
           onClose={() => setAgentWizard(null)}

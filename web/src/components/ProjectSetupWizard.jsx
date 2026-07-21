@@ -85,10 +85,13 @@ export default function ProjectSetupWizard({ agent, setupStatus, onRefresh, onCo
     setError("");
     setStatus("");
     try {
-      const nextSetupStatus = await api.getSetupStatus();
+      const nextSetupStatus = await api.refreshSetupStatus();
       const nextAgentStatus = nextSetupStatus?.[agent];
       setAgentStatus(nextAgentStatus || null);
       if (onRefresh) await onRefresh();
+      if (nextAgentStatus?.configured === false) {
+        throw new Error(`${agentLabel(agent)} must be configured in AgentBridge settings first.`);
+      }
       if (nextAgentStatus?.status !== "ready") {
         throw new Error(nextAgentStatus?.message || `${agentLabel(agent)} is not ready on the desktop.`);
       }

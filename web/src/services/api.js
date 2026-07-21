@@ -210,6 +210,10 @@ export const api = {
     return request("/api/setup/status", {}, serverUrl);
   },
 
+  refreshSetupStatus(serverUrl = null) {
+    return request("/api/setup/status?refresh=1", {}, serverUrl);
+  },
+
   getSystemMetrics(serverUrl = null) {
     return request("/api/system-metrics", {}, serverUrl);
   },
@@ -230,6 +234,12 @@ export const api = {
     return request(`/api/agents/${agentId}/config`, {
       method: "PUT",
       body: JSON.stringify(settings || {}),
+    }, serverUrl);
+  },
+
+  deleteAgentConfig(agentId, serverUrl = null) {
+    return request(`/api/agents/${agentId}/config`, {
+      method: "DELETE",
     }, serverUrl);
   },
 

@@ -39,7 +39,10 @@ npm ci --prefix web
 
 ## Run in development mode
 
-Development mode uses two terminals.
+Development mode uses two terminals and is intended for development on the
+same computer. In this mode, the backend and frontend use different ports. Do
+not point a single Cloudflare Tunnel at port `3847` and expect it to serve the
+interface: the development interface is served separately on port `5173`.
 
 ### Terminal 1: backend
 
@@ -71,7 +74,11 @@ The development frontend communicates with the backend on port `3847`.
 
 ## Run the compiled application
 
-To run AgentBridge as an integrated production-style build:
+This is the recommended mode for normal use and for access from a phone through
+Cloudflare Tunnel. It combines the interface, API, and WebSocket on port `3847`,
+so one tunnel exposes the complete application.
+
+To run AgentBridge as an integrated build:
 
 ```powershell
 cd C:\path\to\AgentBridgeFramework
@@ -190,13 +197,98 @@ Confirm that:
 
 Do not expose port `3847` directly through a router.
 
-Use a private network or authenticated access layer, such as:
+### Primary option: Cloudflare URL for phone access
+
+Use the compiled application for this procedure. Development mode runs the
+interface on `5173` and the backend on `3847`, which would require separate
+tunnels and additional CORS configuration.
+
+#### 1. Install cloudflared on Windows
+
+The following PowerShell commands install the official 64-bit executable for
+the current Windows user without requiring a package manager:
+
+```powershell
+$cloudflaredDir = Join-Path $env:LOCALAPPDATA "cloudflared"
+New-Item -ItemType Directory -Force -Path $cloudflaredDir
+Invoke-WebRequest `
+  -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
+  -OutFile "$cloudflaredDir\cloudflared.exe"
+& "$cloudflaredDir\cloudflared.exe" --version
+```
+
+#### 2. Build and start AgentBridge
+
+In the first PowerShell terminal, enter the repository, build the web
+interface, and start AgentBridge:
+
+```powershell
+cd C:\path\to\AgentBridgeFramework
+npm run build:web
+npm start
+```
+
+Keep this terminal open.
+
+#### 3. Create the Cloudflare URL
+
+In a second PowerShell terminal, run:
+
+```powershell
+& "$env:LOCALAPPDATA\cloudflared\cloudflared.exe" tunnel --url http://127.0.0.1:3847
+```
+
+Keep this terminal open. `cloudflared` prints an HTTPS address similar to:
+
+```text
+https://random-words.trycloudflare.com
+```
+
+Open that address on the phone. The URL works over mobile data or another
+network; the phone does not have to be connected to the same Wi-Fi network.
+
+Quick Tunnel addresses are temporary. Restarting `cloudflared` normally
+creates a different `trycloudflare.com` address.
+
+> **Security:** A Quick Tunnel URL is reachable from the public Internet. The
+> current phone setup screen does not provide a first-time access-token field,
+> so use this zero-configuration workflow only for brief, supervised access and
+> stop `cloudflared` with `Ctrl+C` when finished. For regular use, configure the
+> protected alternative below.
+
+#### 4. Verify or fix a 404 response
+
+Before opening the Cloudflare URL, this local check should return `200`:
+
+```powershell
+(Invoke-WebRequest http://127.0.0.1:3847 -UseBasicParsing).StatusCode
+```
+
+If the browser displays `Route GET:/ not found`, the tunnel is reaching the
+backend but the compiled frontend was not present when the backend started.
+Stop AgentBridge with `Ctrl+C`, then run:
+
+```powershell
+npm run build:web
+npm start
+```
+
+Do not tunnel port `5173` for this primary workflow. Port `5173` is only the
+Vite development frontend; port `3847` serves the complete compiled
+application.
+
+### Permanent and private alternatives
+
+The Quick Tunnel workflow above is intended for temporary personal access. For
+a stable hostname or longer-running access, use a private network or an
+identity-protected access layer, such as:
 
 - Tailscale.
-- Cloudflare Access.
+- A remotely managed Cloudflare Tunnel combined with Cloudflare Access.
 - An equivalent VPN.
 
-Always configure `AGENTBRIDGE_ACCESS_TOKEN` before enabling remote access.
+Use `AGENTBRIDGE_ACCESS_TOKEN` or Cloudflare Access for any regular or
+unattended remote access. Do not leave an unauthenticated Quick Tunnel running.
 
 See `README.md` for the architecture overview and `SECURITY.md` for security
 guidance.
