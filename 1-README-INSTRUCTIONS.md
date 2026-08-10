@@ -6,7 +6,7 @@ This guide explains how to install, run, and develop AgentBridge on Windows.
 
 Install the following software before you begin:
 
-- Node.js 18 or newer. Node.js 20 LTS is recommended.
+- Node.js 20 or newer. Fastify 5 does not support Node.js 18.
 - npm.
 - Codex CLI, Cursor Agent CLI, or both.
 - Git if you plan to work with version-controlled projects.
