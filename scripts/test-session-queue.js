@@ -6,6 +6,8 @@ const path = require("path");
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentbridge-session-queue-"));
 process.env.AGENTBRIDGE_DATA_DIR = temporaryRoot;
 
+const setupService = require("../server/services/setupService");
+setupService.assertCanRunTask = async () => ({ checks: { hasProject: true } });
 const sessionManager = require("../server/sessions/sessionManager");
 
 async function main() {
@@ -64,6 +66,35 @@ async function main() {
   assert.equal(cancelled.status, "ready");
   assert.equal(sessionManager.queue.length, 0);
   assert.equal(sessionManager.getMessageById(queued.queuedMessageId).status, "cancelled");
+
+  const executeSession = sessionManager.setSessionMode("queued-session", "execute");
+  assert.equal(executeSession.mode, "execute");
+  assert.throws(
+    () => sessionManager.setSessionMode("queued-session", "invalid"),
+    /Mode must be ask, plan, or execute/
+  );
+
+  sessionManager.runtimeSessions.set("queued-session", { stale: true });
+  const cursorSession = await sessionManager.setSessionAgent("queued-session", "cursor");
+  assert.equal(cursorSession.agentType, "cursor");
+  assert.equal(cursorSession.sessionMode, "context-replay");
+  assert.equal(cursorSession.nativeSessionId, null);
+  assert.equal(sessionManager.runtimeSessions.has("queued-session"), false);
+  await assert.rejects(
+    sessionManager.setSessionAgent("queued-session", "duel"),
+    /switch only between Cursor and Codex/
+  );
+
+  sessionManager.updateSession("queued-session", { status: "running" });
+  assert.throws(
+    () => sessionManager.setSessionMode("queued-session", "ask"),
+    /finish before changing mode/
+  );
+  await assert.rejects(
+    sessionManager.setSessionAgent("queued-session", "codex"),
+    /finish before changing agents/
+  );
+  sessionManager.updateSession("queued-session", { status: "ready" });
 
   insertSession.run({
     id: "legacy-session",

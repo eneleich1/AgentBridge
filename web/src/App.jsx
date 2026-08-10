@@ -12,12 +12,6 @@ import ProjectSetupWizard from "./components/ProjectSetupWizard";
 import BackendSetupWizard from "./components/BackendSetupWizard";
 import SystemMetricsPanel from "./components/SystemMetricsPanel";
 
-function buildPrompt(mode, text) {
-  if (mode === "plan") return `[Plan mode] ${text}`;
-  if (mode === "execute") return `[Execute mode] ${text}`;
-  return text;
-}
-
 function formatRefreshError(err) {
   const message = String(err?.message || err);
   if (message.startsWith("Failed to fetch ")) {
@@ -134,6 +128,8 @@ export default function App() {
   const [agentUsage, setAgentUsage] = useState({ cursor: null, codex: null });
   const [agentUsageLoading, setAgentUsageLoading] = useState({ cursor: false, codex: false });
   const [mode, setMode] = useState("ask");
+  const [agentChanging, setAgentChanging] = useState(false);
+  const [modeChanging, setModeChanging] = useState(false);
   const [running, setRunning] = useState(false);
   const [liveReply, setLiveReply] = useState(null);
   const [wsStatus, setWsStatus] = useState("connecting");
@@ -656,7 +652,7 @@ export default function App() {
     }
 
     const originalPrompt = prompt;
-    const text = buildPrompt(mode, prompt.trim());
+    const text = prompt.trim();
     const outgoingAttachments = attachments;
     const hadSession = Boolean(activeSession);
     const requestId = sessionRequestIdRef.current + 1;
@@ -738,7 +734,7 @@ export default function App() {
       await handleLiveInterrupt();
     }
 
-    const text = buildPrompt(currentSession?.mode || mode, trimmedText);
+    const text = trimmedText;
     const hadSession = Boolean(activeSession);
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
@@ -838,6 +834,88 @@ export default function App() {
       ));
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  async function handleModeChange(nextMode) {
+    setError("");
+    setMode(nextMode);
+    if (!activeSession) return;
+
+    const previousMode = activeSession.mode || "ask";
+    const optimisticSession = { ...activeSession, mode: nextMode };
+    setActiveSession(optimisticSession);
+    setSessions((prev) => prev.map((item) =>
+      item.id === activeSession.id ? buildSessionPreview({ ...item, mode: nextMode }) : item
+    ));
+    setModeChanging(true);
+
+    try {
+      const { session } = await api.updateSessionMode(activeSession.id, nextMode);
+      setActiveSession(session);
+      setSessions((prev) => prev.map((item) =>
+        item.id === session.id ? buildSessionPreview({ ...item, ...session }) : item
+      ));
+    } catch (err) {
+      setMode(previousMode);
+      setActiveSession((current) => current?.id === activeSession.id
+        ? { ...current, mode: previousMode }
+        : current);
+      setSessions((prev) => prev.map((item) =>
+        item.id === activeSession.id ? buildSessionPreview({ ...item, mode: previousMode }) : item
+      ));
+      setError(err.message);
+    } finally {
+      setModeChanging(false);
+    }
+  }
+
+  async function handleAgentChange(nextAgent) {
+    setError("");
+    if (!activeSession) {
+      setAgent(nextAgent);
+      if (nextAgent === "duel") setMode("plan");
+      return;
+    }
+
+    const previousAgent = activeSession.agentType || agent;
+    if (nextAgent === previousAgent) return;
+
+    setAgent(nextAgent);
+    setAgentChanging(true);
+    const optimisticSession = {
+      ...activeSession,
+      agentType: nextAgent,
+      nativeSessionId: null,
+      sessionMode: nextAgent === "codex" ? "native-resume" : "context-replay",
+    };
+    setActiveSession(optimisticSession);
+    setSessions((prev) => prev.map((item) =>
+      item.id === activeSession.id
+        ? buildSessionPreview({ ...item, ...optimisticSession })
+        : item
+    ));
+
+    try {
+      const { session } = await api.updateSessionAgent(activeSession.id, nextAgent);
+      setAgent(session.agentType);
+      setActiveSession(session);
+      setSessions((prev) => prev.map((item) =>
+        item.id === session.id ? buildSessionPreview({ ...item, ...session }) : item
+      ));
+    } catch (err) {
+      setAgent(previousAgent);
+      setActiveSession((current) => current?.id === activeSession.id
+        ? { ...current, agentType: previousAgent }
+        : current);
+      setSessions((prev) => prev.map((item) =>
+        item.id === activeSession.id
+          ? buildSessionPreview({ ...item, agentType: previousAgent })
+          : item
+      ));
+      setError(err.message);
+    } finally {
+      setAgentChanging(false);
     }
   }
 
@@ -1021,14 +1099,13 @@ export default function App() {
               agent={currentSession?.agentType || agent}
               mode={currentSession?.mode || mode}
               running={running}
+              agentChanging={agentChanging}
+              modeChanging={modeChanging}
               duelEnabled={setupStatus?.duel?.enabled === true}
               onPromptChange={setPrompt}
               onAttachmentsChange={setAttachments}
-              onAgentChange={(nextAgent) => {
-                setAgent(nextAgent);
-                if (nextAgent === "duel") setMode("plan");
-              }}
-              onModeChange={setMode}
+              onAgentChange={handleAgentChange}
+              onModeChange={handleModeChange}
               onSend={handleSend}
               onCancel={handleCancel}
               onLiveSubmit={handleLiveSubmit}

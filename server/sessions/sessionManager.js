@@ -11,6 +11,19 @@ const { broadcast } = require("../realtime/websocket");
 const { DATA_DIR } = require("../utils/runtimeConfig");
 const { AgentSession } = require("./agentSession");
 
+const SESSION_MODES = new Set(["ask", "plan", "execute"]);
+
+function normalizeSessionMode(mode, agentType) {
+  if (agentType === "duel") return "plan";
+  const normalized = String(mode || "ask").toLowerCase();
+  if (!SESSION_MODES.has(normalized)) {
+    const error = new Error("Mode must be ask, plan, or execute.");
+    error.code = "invalid_mode";
+    throw error;
+  }
+  return normalized;
+}
+
 const DB_PATH = path.join(DATA_DIR, "agentbridge.sqlite");
 
 class SessionManager {
@@ -161,7 +174,7 @@ class SessionManager {
       projectPath: project.path,
       projectName: project.name,
       agentType,
-      mode: agentType === "duel" ? "plan" : mode || "ask",
+      mode: normalizeSessionMode(mode, agentType),
       sessionMode: agentType === "codex" ? "native-resume" : "context-replay",
       status: setupService.isAgentReady(agentType, setup) ? "ready" : "failed",
       processId: null,
@@ -229,6 +242,7 @@ class SessionManager {
     };
     this.db.prepare(`
       UPDATE sessions SET
+        agent_type = @agentType,
         mode = @mode,
         session_mode = @sessionMode,
         status = @status,
@@ -241,6 +255,7 @@ class SessionManager {
       WHERE id = @id
     `).run({
       id: sessionId,
+      agentType: next.agentType,
       mode: next.mode,
       sessionMode: next.sessionMode,
       status: next.status,
@@ -252,6 +267,76 @@ class SessionManager {
       lastActivityAt: next.lastActivityAt || next.updatedAt,
     });
     return this.getSessionById(sessionId);
+  }
+
+  setSessionMode(sessionId, mode) {
+    const session = this.getSessionById(sessionId);
+    if (!session) return null;
+    if (session.agentType === "duel") {
+      const error = new Error("Agent Duel sessions stay in plan mode.");
+      error.code = "mode_locked";
+      throw error;
+    }
+    if (this.activeRuns.has(sessionId) || ["queued", "running"].includes(session.status)) {
+      const error = new Error("Wait for the current message to finish before changing mode.");
+      error.code = "session_busy";
+      throw error;
+    }
+
+    const normalizedMode = normalizeSessionMode(mode, session.agentType);
+    const updated = this.updateSession(sessionId, {
+      mode: normalizedMode,
+      lastActivityAt: this.now(),
+    });
+    this.runtimeSessions.delete(sessionId);
+    this.emitSessionEvent("session_updated", sessionId, { session: updated }, updated);
+    return updated;
+  }
+
+  async setSessionAgent(sessionId, agentType) {
+    const session = this.getSessionById(sessionId);
+    if (!session) return null;
+    if (this.activeRuns.has(sessionId) || ["queued", "running"].includes(session.status)) {
+      const error = new Error("Wait for the current message to finish before changing agents.");
+      error.code = "session_busy";
+      throw error;
+    }
+
+    const normalizedAgent = String(agentType || "").toLowerCase();
+    if (!["cursor", "codex"].includes(normalizedAgent)) {
+      const error = new Error("Existing sessions can switch only between Cursor and Codex.");
+      error.code = "invalid_agent";
+      throw error;
+    }
+    if (session.agentType === "duel") {
+      const error = new Error("Agent Duel sessions cannot change agents.");
+      error.code = "agent_locked";
+      throw error;
+    }
+    if (session.agentType === normalizedAgent) return session;
+
+    await setupService.assertCanRunTask({
+      agentType: normalizedAgent,
+      projectId: session.projectId,
+    });
+
+    const updated = this.updateSession(sessionId, {
+      agentType: normalizedAgent,
+      sessionMode: normalizedAgent === "codex" ? "native-resume" : "context-replay",
+      nativeSessionId: null,
+      duelWinner: null,
+      status: "ready",
+      processId: null,
+      lastActivityAt: this.now(),
+    });
+    this.runtimeSessions.delete(sessionId);
+    this.appendSessionLog(
+      sessionId,
+      "system",
+      `Agent changed from ${session.agentType} to ${normalizedAgent}.\n`
+    );
+    this.emitSessionEvent("session_updated", sessionId, { session: updated }, updated);
+    return updated;
   }
 
   createMessage({

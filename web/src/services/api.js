@@ -335,6 +335,20 @@ export const api = {
     }, serverUrl);
   },
 
+  updateSessionMode(id, mode, serverUrl = null) {
+    return request(`/api/sessions/${id}/mode`, {
+      method: "PATCH",
+      body: JSON.stringify({ mode }),
+    }, serverUrl);
+  },
+
+  updateSessionAgent(id, agentType, serverUrl = null) {
+    return request(`/api/sessions/${id}/agent`, {
+      method: "PATCH",
+      body: JSON.stringify({ agentType }),
+    }, serverUrl);
+  },
+
   getSessionMessages(id, serverUrl = null) {
     return request(`/api/sessions/${id}/messages`, {}, serverUrl);
   },

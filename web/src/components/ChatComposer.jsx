@@ -8,6 +8,8 @@ export default function ChatComposer({
   agent,
   mode,
   running,
+  agentChanging = false,
+  modeChanging = false,
   duelEnabled = false,
   onPromptChange,
   onAttachmentsChange,
@@ -188,7 +190,12 @@ export default function ChatComposer({
   return (
     <div className="composer-wrap">
       <div className="composer-toolbar">
-        <select value={agent} onChange={(e) => onAgentChange(e.target.value)} disabled={running}>
+        <select
+          value={agent}
+          onChange={(e) => onAgentChange(e.target.value)}
+          disabled={running || agentChanging || agent === "duel"}
+          aria-label="Agent"
+        >
           <option value="cursor">Cursor</option>
           <option value="codex">Codex</option>
           {(duelEnabled || agent === "duel") && (
@@ -197,7 +204,12 @@ export default function ChatComposer({
             </option>
           )}
         </select>
-        <select value={mode} onChange={(e) => onModeChange(e.target.value)} disabled={running || agent === "duel"}>
+        <select
+          value={mode}
+          onChange={(e) => onModeChange(e.target.value)}
+          disabled={running || modeChanging || agent === "duel"}
+          aria-label="Agent mode"
+        >
           <option value="ask">Ask</option>
           <option value="plan">Plan</option>
           <option value="execute">Execute</option>

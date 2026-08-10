@@ -5,8 +5,25 @@ const { resolveCursorAgentCommand, refreshProcessPath } = require("./cliPath");
 
 /**
  * Cursor Agent CLI adapter.
- * Ask/plan use read-only CLI modes. Execute keeps tool access with --trust/--force.
+ * Trust every non-interactive workspace explicitly. Ask/plan use Cursor's
+ * read-only modes; execute omits --mode and force-approves tool calls.
  */
+function buildCursorAgentArgs({ agentCommand, projectPath, prompt, mode = "ask" }) {
+  const normalizedMode = String(mode || "ask").toLowerCase();
+  const args = ["/d", "/c", agentCommand, "--print", "--trust"];
+
+  if (normalizedMode === "execute") {
+    // Cursor CLI only accepts ask/plan as explicit --mode values. Its default
+    // --print mode has write/shell tools, and --force makes it headless.
+    args.push("--force");
+  } else {
+    args.push("--mode", normalizedMode === "plan" ? "plan" : "ask");
+  }
+
+  args.push("--workspace", projectPath, prompt);
+  return args;
+}
+
 function createCursorAgent() {
   return {
     id: "cursor",
@@ -20,19 +37,12 @@ function createCursorAgent() {
 
       refreshProcessPath();
       const agentCommand = resolveCursorAgentCommand();
-      const normalizedMode = String(mode || "ask").toLowerCase();
-
-      const args = ["/d", "/c", agentCommand, "--print"];
-
-      if (normalizedMode === "plan") {
-        args.push("--mode", "plan");
-      } else if (normalizedMode === "execute") {
-        args.push("--trust", "--force");
-      } else {
-        args.push("--mode", "ask");
-      }
-
-      args.push("--workspace", resolved, prompt);
+      const args = buildCursorAgentArgs({
+        agentCommand,
+        projectPath: resolved,
+        prompt,
+        mode,
+      });
 
       return runProcess("cmd.exe", args, {
         cwd: resolved,
@@ -46,5 +56,6 @@ function createCursorAgent() {
 }
 
 module.exports = {
+  buildCursorAgentArgs,
   createCursorAgent,
 };

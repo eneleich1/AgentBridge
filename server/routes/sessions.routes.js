@@ -47,6 +47,41 @@ async function sessionsRoutes(fastify) {
     return { session };
   });
 
+  fastify.patch("/api/sessions/:sessionId/mode", async (request, reply) => {
+    try {
+      const session = sessionManager.setSessionMode(
+        request.params.sessionId,
+        request.body?.mode
+      );
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found" });
+      }
+      return { session };
+    } catch (error) {
+      return reply.code(400).send({ error: error.message, code: error.code });
+    }
+  });
+
+  fastify.patch("/api/sessions/:sessionId/agent", async (request, reply) => {
+    try {
+      const session = await sessionManager.setSessionAgent(
+        request.params.sessionId,
+        request.body?.agentType
+      );
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found" });
+      }
+      return { session };
+    } catch (error) {
+      return reply.code(400).send({
+        error: error.message,
+        code: error.code,
+        agent: error.agent,
+        setup: error.setup,
+      });
+    }
+  });
+
   fastify.post("/api/sessions/:sessionId/duel-winner", async (request, reply) => {
     try {
       const result = sessionManager.selectDuelWinner(

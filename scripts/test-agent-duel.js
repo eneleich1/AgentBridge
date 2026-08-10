@@ -8,6 +8,8 @@ process.env.AGENTBRIDGE_DATA_DIR = temporaryRoot;
 
 const { createDuelAgent } = require("../server/agents/duelAgent");
 const { updateAgentConfig, updateAgentDuelSettings } = require("../server/agents/agentFactory");
+const setupService = require("../server/services/setupService");
+setupService.assertCanRunTask = async () => ({ checks: { hasProject: true } });
 const sessionManager = require("../server/sessions/sessionManager");
 
 function fakeAgent(id, result, receivedPrompts) {

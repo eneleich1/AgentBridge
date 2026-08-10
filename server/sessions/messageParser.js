@@ -42,6 +42,24 @@ function classifyAgentError(agentType, stdout, stderr) {
   }
 
   if (
+    combined.includes("workspace trust required") ||
+    combined.includes("do you trust the contents of this directory")
+  ) {
+    return {
+      type: "workspace_trust",
+      agentType,
+      userMessage:
+        "Cursor Agent blocked this folder because workspace trust was not granted for a non-interactive run.",
+      technicalMessage: combined.trim(),
+      fixSteps: [
+        "Restart AgentBridge so it picks up the latest Cursor adapter (uses --trust, plus --force for Execute).",
+        "Or verify Ask on the desktop PC: agent --print --trust --mode ask --workspace \"<project-path>\" \"ok\"",
+        "Apply the fix on the desktop machine, not in the browser.",
+      ],
+    };
+  }
+
+  if (
     combined.includes("read-only") ||
     combined.includes("sandbox") ||
     combined.includes("permission denied")
@@ -119,10 +137,10 @@ function buildSessionReplayPrompt(session, messages, nextUserContent) {
     "Agent:",
     session.agentType,
     "",
-    "Previous conversation summary:",
+    "Previous conversation summary (background only):",
     summary,
     "",
-    "Recent messages:",
+    "Recent messages (background only):",
     recentMessages.length > 0 ? recentMessages.join("\n") : "No prior messages.",
     "",
     "Current user request:",
@@ -130,7 +148,10 @@ function buildSessionReplayPrompt(session, messages, nextUserContent) {
     "",
     "Rules:",
     "- Respect the project context.",
-    "- If the user refers to previous instructions, use the recent messages.",
+    "- Treat the current user request as authoritative and act only on that request.",
+    "- Do not resume or execute unfinished work from the summary or recent messages unless the current user request explicitly asks you to continue it.",
+    "- A greeting, acknowledgement, or mode change is not authorization to resume previous work.",
+    "- If the current user request refers to previous instructions, use the recent messages only as supporting context.",
     "- Do not pretend to remember things not present in the provided context.",
   ].join("\n");
 }
