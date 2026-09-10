@@ -6,7 +6,7 @@ const setupService = require("../services/setupService");
 const projectService = require("../services/projectService");
 const logService = require("../services/logService");
 const attachmentService = require("../services/attachmentService");
-const { getAgentDuelSettings, getMaxConcurrency } = require("../agents/agentFactory");
+const { getAgentDuelSettings, getMaxConcurrency, getAgentConnectionConfig } = require("../agents/agentFactory");
 const { broadcast } = require("../realtime/websocket");
 const { DATA_DIR } = require("../utils/runtimeConfig");
 const { AgentSession } = require("./agentSession");
@@ -33,6 +33,7 @@ class SessionManager {
     this.runtimeSessions = new Map();
     this.queue = [];
     this.projectLocks = new Map();
+    this.pendingPermissions = new Map();
     this.maxActiveSessions = 2;
   }
 
@@ -55,6 +56,11 @@ class SessionManager {
         status TEXT NOT NULL,
         process_id INTEGER,
         native_session_id TEXT,
+        provider_session_id TEXT,
+        connection_mode TEXT,
+        protocol TEXT,
+        transport TEXT,
+        connection_metadata TEXT DEFAULT '{}',
         duel_winner TEXT,
         summary TEXT DEFAULT '',
         created_at TEXT NOT NULL,
@@ -80,6 +86,11 @@ class SessionManager {
       );
     `);
     this.ensureColumn("sessions", "native_session_id", "TEXT");
+    this.ensureColumn("sessions", "provider_session_id", "TEXT");
+    this.ensureColumn("sessions", "connection_mode", "TEXT");
+    this.ensureColumn("sessions", "protocol", "TEXT");
+    this.ensureColumn("sessions", "transport", "TEXT");
+    this.ensureColumn("sessions", "connection_metadata", "TEXT DEFAULT '{}'");
     this.ensureColumn("sessions", "duel_winner", "TEXT");
     this.ensureColumn("session_messages", "reply_to_message_id", "TEXT");
     this.ensureColumn("session_messages", "duel_winner", "TEXT");
@@ -108,6 +119,13 @@ class SessionManager {
       status: row.status,
       processId: row.process_id,
       nativeSessionId: row.native_session_id || null,
+      // nativeSessionId remains for existing clients and persisted records;
+      // providerSessionId is the protocol-neutral name used by connectors.
+      providerSessionId: row.provider_session_id || row.native_session_id || null,
+      connectionMode: row.connection_mode || null,
+      protocol: row.protocol || null,
+      transport: row.transport || null,
+      connectionMetadata: this.parseJson(row.connection_metadata, {}),
       duelWinner: row.duel_winner || null,
       summary: row.summary || "",
       createdAt: row.created_at,
@@ -168,6 +186,9 @@ class SessionManager {
     }
 
     const timestamp = this.now();
+    const connectionConfig = agentType === "duel"
+      ? { connectionMode: "agentbridge_protocol", protocol: "agentbridge", transport: "process" }
+      : getAgentConnectionConfig(agentType);
     const session = {
       id: uuidv4(),
       projectId,
@@ -179,6 +200,11 @@ class SessionManager {
       status: setupService.isAgentReady(agentType, setup) ? "ready" : "failed",
       processId: null,
       nativeSessionId: null,
+      providerSessionId: null,
+      connectionMode: connectionConfig.connectionMode || null,
+      protocol: connectionConfig.protocol || null,
+      transport: connectionConfig.transport || null,
+      connectionMetadata: {},
       duelWinner: null,
       summary: "",
       createdAt: timestamp,
@@ -189,12 +215,14 @@ class SessionManager {
     this.db.prepare(`
       INSERT INTO sessions (
         id, project_id, project_path, project_name, agent_type, mode, session_mode,
-        status, process_id, native_session_id, duel_winner, summary, created_at, updated_at, last_activity_at
+        status, process_id, native_session_id, provider_session_id, connection_mode, protocol, transport,
+        connection_metadata, duel_winner, summary, created_at, updated_at, last_activity_at
       ) VALUES (
         @id, @projectId, @projectPath, @projectName, @agentType, @mode, @sessionMode,
-        @status, @processId, @nativeSessionId, @duelWinner, @summary, @createdAt, @updatedAt, @lastActivityAt
+        @status, @processId, @nativeSessionId, @providerSessionId, @connectionMode, @protocol, @transport,
+        @connectionMetadata, @duelWinner, @summary, @createdAt, @updatedAt, @lastActivityAt
       )
-    `).run(session);
+    `).run({ ...session, connectionMetadata: JSON.stringify(session.connectionMetadata) });
 
     logService.writeSessionLogHeader(session.id, {
       agentType: session.agentType,
@@ -248,6 +276,11 @@ class SessionManager {
         status = @status,
         process_id = @processId,
         native_session_id = @nativeSessionId,
+        provider_session_id = @providerSessionId,
+        connection_mode = @connectionMode,
+        protocol = @protocol,
+        transport = @transport,
+        connection_metadata = @connectionMetadata,
         duel_winner = @duelWinner,
         summary = @summary,
         updated_at = @updatedAt,
@@ -261,6 +294,11 @@ class SessionManager {
       status: next.status,
       processId: next.processId,
       nativeSessionId: next.nativeSessionId || null,
+      providerSessionId: next.providerSessionId || next.nativeSessionId || null,
+      connectionMode: next.connectionMode || null,
+      protocol: next.protocol || null,
+      transport: next.transport || null,
+      connectionMetadata: JSON.stringify(next.connectionMetadata || {}),
       duelWinner: next.duelWinner || null,
       summary: next.summary,
       updatedAt: next.updatedAt,
@@ -320,10 +358,16 @@ class SessionManager {
       projectId: session.projectId,
     });
 
+    const connectionConfig = getAgentConnectionConfig(normalizedAgent);
     const updated = this.updateSession(sessionId, {
       agentType: normalizedAgent,
       sessionMode: normalizedAgent === "codex" ? "native-resume" : "context-replay",
       nativeSessionId: null,
+      providerSessionId: null,
+      connectionMode: connectionConfig.connectionMode || null,
+      protocol: connectionConfig.protocol || null,
+      transport: connectionConfig.transport || null,
+      connectionMetadata: {},
       duelWinner: null,
       status: "ready",
       processId: null,
@@ -708,6 +752,7 @@ class SessionManager {
     }
 
     this.queue = this.queue.filter((entry) => entry.sessionId !== sessionId);
+    this.clearPermissionRequests(sessionId);
     this.db.prepare(`
       DELETE FROM session_messages
       WHERE session_id = ? AND rowid > ?
@@ -841,6 +886,30 @@ class SessionManager {
       session,
       payload,
     });
+  }
+
+  registerPermissionRequest(sessionId, requestId, connection) {
+    this.pendingPermissions.set(`${sessionId}:${requestId}`, { connection, createdAt: this.now() });
+  }
+
+  clearPermissionRequests(sessionId) {
+    for (const key of this.pendingPermissions.keys()) {
+      if (key.startsWith(`${sessionId}:`)) this.pendingPermissions.delete(key);
+    }
+  }
+
+  async respondToPermission(sessionId, requestId, { decision, optionId } = {}) {
+    const pending = this.pendingPermissions.get(`${sessionId}:${requestId}`);
+    if (!pending) {
+      const error = new Error("Permission request not found or no longer pending.");
+      error.code = "permission_not_found";
+      throw error;
+    }
+    await pending.connection.respondToPermission({ requestId, decision, optionId });
+    this.pendingPermissions.delete(`${sessionId}:${requestId}`);
+    const session = this.getSessionById(sessionId);
+    this.emitSessionEvent("permission_resolved", sessionId, { requestId, decision, optionId }, session);
+    return session;
   }
 
   deleteSession(sessionId) {

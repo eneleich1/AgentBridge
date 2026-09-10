@@ -1,6 +1,7 @@
 const {
   getAgentConfig,
   getAgentDuelSettings,
+  getAgentConnectionConfig,
   listAgents,
   resetAgentConfig,
   updateAgentConfig,
@@ -44,6 +45,21 @@ async function agentsRoutes(fastify) {
     } catch (error) {
       const statusCode = error.message.includes("Unknown agent type") ? 404 : 400;
       return reply.code(statusCode).send({ error: error.message });
+    }
+  });
+
+  fastify.get("/api/agents/:id/connection", async (request, reply) => {
+    try {
+      const connection = getAgentConnectionConfig(request.params.id);
+      return {
+        configuredMode: connection.connectionMode,
+        selectedProtocol: connection.protocol,
+        selectedTransport: connection.transport,
+        fallbackAvailable: Boolean(connection.fallback),
+        connection,
+      };
+    } catch (error) {
+      return reply.code(404).send({ error: error.message });
     }
   });
 

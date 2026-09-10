@@ -198,6 +198,7 @@ export default function ChatComposer({
         >
           <option value="cursor">Cursor</option>
           <option value="codex">Codex</option>
+          <option value="local">Local model</option>
           {(duelEnabled || agent === "duel") && (
             <option value="duel" disabled={!duelEnabled}>
               Agent Duel{duelEnabled ? "" : " (disabled)"}

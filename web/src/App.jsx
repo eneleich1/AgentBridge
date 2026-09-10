@@ -11,6 +11,7 @@ import AgentSetupWizard from "./components/AgentSetupWizard";
 import ProjectSetupWizard from "./components/ProjectSetupWizard";
 import BackendSetupWizard from "./components/BackendSetupWizard";
 import SystemMetricsPanel from "./components/SystemMetricsPanel";
+import ConfirmDialog from "./components/ConfirmDialog";
 
 function formatRefreshError(err) {
   const message = String(err?.message || err);
@@ -45,6 +46,7 @@ function isSessionBusy(status) {
 function getAgentLabel(agentId, detailed = false) {
   if (agentId === "cursor") return detailed ? "Cursor Agent" : "Cursor";
   if (agentId === "codex") return detailed ? "Codex CLI" : "Codex";
+  if (agentId === "local") return detailed ? "Local Model" : "Local";
   return "Agent Duel";
 }
 
@@ -82,6 +84,7 @@ function getAgentNotReadyMessage(agentType, setupStatus) {
 const DEFAULT_AGENT_CONFIGS = {
   cursor: { id: "cursor", settings: { configured: false } },
   codex: { id: "codex", settings: { configured: false, model: DEFAULT_CODEX_MODEL } },
+  local: { id: "local", settings: { configured: false, connectionMode: "ollama_http", endpoint: "http://127.0.0.1:11434/v1", model: "gpt-oss-20b" } },
 };
 
 function updateSetupAgentConfigured(current, agentId, configured) {
@@ -94,7 +97,7 @@ function updateSetupAgentConfigured(current, agentId, configured) {
     },
   };
   const hasProject = current.checks?.hasProject ?? Boolean(current.projects?.length);
-  const hasReadyAgent = ["cursor", "codex"].some(
+  const hasReadyAgent = ["cursor", "codex", "local"].some(
     (id) => next[id]?.configured === true && next[id]?.status === "ready"
   );
   return {
@@ -142,6 +145,8 @@ export default function App() {
   const [systemMetrics, setSystemMetrics] = useState(null);
   const [systemMetricsVisible, setSystemMetricsVisible] = useState(api.getSystemMetricsVisible());
   const [theme, setThemeState] = useState(api.getTheme());
+  const [pendingPermission, setPendingPermission] = useState(null);
+  const [resolvingPermission, setResolvingPermission] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -190,13 +195,14 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [healthRes, setupRes, projectsRes, sessionsRes, cursorConfigRes, codexConfigRes] = await Promise.all([
+      const [healthRes, setupRes, projectsRes, sessionsRes, cursorConfigRes, codexConfigRes, localConfigRes] = await Promise.all([
         api.getHealth(),
         api.getSetupStatus(),
         api.getProjects(),
         api.getSessions(),
         api.getAgentConfig("cursor"),
         api.getAgentConfig("codex"),
+        api.getAgentConfig("local"),
       ]);
       setHealth(healthRes);
       setSetupStatus(setupRes);
@@ -205,6 +211,7 @@ export default function App() {
       setAgentConfigs({
         cursor: cursorConfigRes.agent || DEFAULT_AGENT_CONFIGS.cursor,
         codex: codexConfigRes.agent || DEFAULT_AGENT_CONFIGS.codex,
+        local: localConfigRes.agent || DEFAULT_AGENT_CONFIGS.local,
       });
 
       if (projectsRes.projects?.length) {
@@ -426,6 +433,18 @@ export default function App() {
         queueDuelOutput(msg.payload);
       }
 
+      if (msg.type === "permission_requested" && msg.payload?.requestId) {
+        setPendingPermission({
+          sessionId: msg.sessionId,
+          requestId: msg.payload.requestId,
+          permission: msg.payload.permission || {},
+        });
+      }
+
+      if (msg.type === "permission_resolved" && msg.payload?.requestId) {
+        setPendingPermission((current) => current?.requestId === msg.payload.requestId ? null : current);
+      }
+
       if ((msg.type === "agent_error" || msg.type === "session_completed") && msg.payload?.message) {
         if (msg.sessionId === selectedSessionIdRef.current) {
           flushPendingAgentOutput();
@@ -530,7 +549,7 @@ export default function App() {
       setProjectWizardOpen(true);
       return;
     }
-    if (nextAction === "cursor" || nextAction === "codex") {
+    if (nextAction === "cursor" || nextAction === "codex" || nextAction === "local") {
       setAgentWizard(nextAction);
     }
   }
@@ -837,6 +856,24 @@ export default function App() {
     }
   }
 
+  async function handlePermissionDecision(decision) {
+    if (!pendingPermission || resolvingPermission) return;
+    setResolvingPermission(true);
+    setError("");
+    try {
+      await api.respondToSessionPermission(
+        pendingPermission.sessionId,
+        pendingPermission.requestId,
+        { decision }
+      );
+      setPendingPermission(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResolvingPermission(false);
+    }
+  }
+
   async function handleModeChange(nextMode) {
     setError("");
     setMode(nextMode);
@@ -1122,6 +1159,7 @@ export default function App() {
           setupStatus={setupStatus}
           defaultAgent={defaultAgent}
           codexModel={agentConfigs.codex?.settings?.model || DEFAULT_CODEX_MODEL}
+          connectionSummary={agentConfigs[defaultAgent]?.connection}
           agentUsage={agentUsage}
           agentUsageLoading={agentUsageLoading}
           agentDuelEnabled={setupStatus?.duel?.enabled === true}
@@ -1175,6 +1213,22 @@ export default function App() {
           onRefresh={refresh}
           onSaveAgentConfig={handleSaveAgentConfig}
           onClose={() => setAgentWizard(null)}
+        />
+      )}
+
+      {pendingPermission && (
+        <ConfirmDialog
+          title="Agent permission required"
+          message={
+            pendingPermission.permission?.message ||
+            pendingPermission.permission?.description ||
+            "The connected agent requested permission to continue. Review the requested action before approving it."
+          }
+          confirmLabel="Allow once"
+          cancelLabel="Reject"
+          busy={resolvingPermission}
+          onConfirm={() => handlePermissionDecision("approve")}
+          onCancel={() => handlePermissionDecision("reject")}
         />
       )}
     </div>

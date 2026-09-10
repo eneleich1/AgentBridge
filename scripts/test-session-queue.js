@@ -80,6 +80,25 @@ async function main() {
   assert.equal(cursorSession.sessionMode, "context-replay");
   assert.equal(cursorSession.nativeSessionId, null);
   assert.equal(sessionManager.runtimeSessions.has("queued-session"), false);
+
+  const mappedSession = sessionManager.updateSession("queued-session", {
+    providerSessionId: "provider-session-1",
+    nativeSessionId: "provider-session-1",
+    connectionMode: "acp",
+    protocol: "acp",
+    transport: "stdio",
+    connectionMetadata: { test: true },
+  });
+  assert.equal(mappedSession.providerSessionId, "provider-session-1");
+  assert.equal(mappedSession.protocol, "acp");
+  assert.equal(mappedSession.transport, "stdio");
+
+  let permissionDecision = null;
+  sessionManager.registerPermissionRequest("queued-session", "request-1", {
+    respondToPermission: async (value) => { permissionDecision = value; },
+  });
+  await sessionManager.respondToPermission("queued-session", "request-1", { decision: "approve" });
+  assert.deepEqual(permissionDecision, { requestId: "request-1", decision: "approve", optionId: undefined });
   await assert.rejects(
     sessionManager.setSessionAgent("queued-session", "duel"),
     /switch only between Cursor and Codex/

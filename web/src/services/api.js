@@ -103,11 +103,11 @@ function setSidebarWidth(width) {
 
 function getDefaultAgent() {
   const agent = localStorage.getItem(DEFAULT_AGENT_KEY);
-  return agent === "codex" ? "codex" : "cursor";
+  return ["cursor", "codex", "local"].includes(agent) ? agent : "cursor";
 }
 
 function setDefaultAgent(agent) {
-  localStorage.setItem(DEFAULT_AGENT_KEY, agent === "codex" ? "codex" : "cursor");
+  localStorage.setItem(DEFAULT_AGENT_KEY, ["cursor", "codex", "local"].includes(agent) ? agent : "cursor");
 }
 
 function getSystemMetricsVisible() {
@@ -326,6 +326,13 @@ export const api = {
 
   cancelSession(id, serverUrl = null) {
     return request(`/api/sessions/${id}/cancel`, { method: "POST" }, serverUrl);
+  },
+
+  respondToSessionPermission(sessionId, requestId, { decision, optionId } = {}, serverUrl = null) {
+    return request(`/api/sessions/${sessionId}/permissions/${requestId}`, {
+      method: "POST",
+      body: JSON.stringify({ decision, optionId }),
+    }, serverUrl);
   },
 
   selectDuelWinner(id, messageId, winner, serverUrl = null) {

@@ -6,7 +6,8 @@
       "description": "Cursor Agent CLI",
       "enabled": true,
       "settings": {
-        "configured": false
+        "configured": false,
+        "connectionMode": "auto"
       }
     },
     {
@@ -16,7 +17,20 @@
       "enabled": true,
       "settings": {
         "configured": false,
-        "model": "gpt-5.6-sol"
+        "model": "gpt-5.6-sol",
+        "connectionMode": "agentbridge_protocol"
+      }
+    },
+    {
+      "id": "local",
+      "name": "Local Model",
+      "description": "Ollama or OpenAI-compatible local endpoint",
+      "enabled": true,
+      "settings": {
+        "configured": false,
+        "connectionMode": "ollama_http",
+        "endpoint": "http://127.0.0.1:11434/v1",
+        "model": "gpt-oss-20b"
       }
     }
   ],

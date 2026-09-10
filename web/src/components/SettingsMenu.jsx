@@ -41,7 +41,7 @@ function UsageDisclosure({ agentId, usage, loading, onRefresh }) {
         onClick={() => setOpen((current) => !current)}
       >
         <div className="settings-usage-trigger-copy">
-          <span className="settings-usage-kicker">{agentId === "codex" ? "Codex CLI" : "Cursor Agent"}</span>
+          <span className="settings-usage-kicker">{agentId === "codex" ? "Codex CLI" : agentId === "local" ? "Local Model" : "Cursor Agent"}</span>
           <strong>Usage remaining</strong>
           <small>{loading ? "Checking usage..." : usage?.headline || "Usage data unavailable"}</small>
         </div>
@@ -81,6 +81,7 @@ export default function SettingsMenu({
   defaultAgent,
   theme,
   codexModel,
+  connectionSummary,
   agentUsage,
   agentUsageLoading,
   agentDuelEnabled,
@@ -100,7 +101,7 @@ export default function SettingsMenu({
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [updatingDuel, setUpdatingDuel] = useState(false);
   const [duelError, setDuelError] = useState("");
-  const selectedAgentName = defaultAgent === "codex" ? "Codex CLI" : "Cursor Agent";
+  const selectedAgentName = defaultAgent === "codex" ? "Codex CLI" : defaultAgent === "local" ? "Local Model" : "Cursor Agent";
   const selectedAgentStatus = setupStatus?.[defaultAgent];
   const selectedAgentConfigured = selectedAgentStatus?.configured === true;
 
@@ -238,6 +239,13 @@ export default function SettingsMenu({
             >
               Codex
             </button>
+            <button
+              type="button"
+              className={`settings-choice ${defaultAgent === "local" ? "active" : ""}`}
+              onClick={() => onDefaultAgentChange("local")}
+            >
+              Local
+            </button>
           </div>
         </div>
 
@@ -252,15 +260,20 @@ export default function SettingsMenu({
             <small>
               {statusText(selectedAgentStatus)}
               {defaultAgent === "codex" && codexModel ? ` - Model: ${codexModel}` : ""}
+              {connectionSummary?.connectionMode
+                ? ` - ${connectionSummary.connectionMode} → ${connectionSummary.protocol || "pending"} / ${connectionSummary.transport || "pending"}`
+                : ""}
             </small>
           </button>
 
-          <UsageDisclosure
-            agentId={defaultAgent}
-            usage={agentUsage?.[defaultAgent]}
-            loading={agentUsageLoading?.[defaultAgent]}
-            onRefresh={() => onRefreshUsage(defaultAgent)}
-          />
+          {defaultAgent !== "local" && (
+            <UsageDisclosure
+              agentId={defaultAgent}
+              usage={agentUsage?.[defaultAgent]}
+              loading={agentUsageLoading?.[defaultAgent]}
+              onRefresh={() => onRefreshUsage(defaultAgent)}
+            />
+          )}
 
           <button
             type="button"

@@ -38,6 +38,21 @@ async function main() {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().agent.settings.configured, false);
     assert.equal(response.json().agent.settings.model, "gpt-5.6-sol");
+    assert.equal(response.json().agent.settings.connectionMode, "agentbridge_protocol");
+
+    response = await app.inject({
+      method: "GET",
+      url: "/api/agents/cursor/connection",
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().configuredMode, "auto");
+    assert.equal(response.json().selectedProtocol, "acp");
+    assert.equal(response.json().fallbackAvailable, true);
+
+    response = await app.inject({ method: "GET", url: "/api/agents/local/config" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().agent.settings.connectionMode, "ollama_http");
+    assert.equal(response.json().agent.settings.model, "gpt-oss-20b");
 
     response = await app.inject({
       method: "PUT",
@@ -77,6 +92,15 @@ async function main() {
     });
     assert.equal(response.statusCode, 200);
     assert.equal(response.json().agent.settings.configured, true);
+    assert.equal(response.json().agent.settings.connectionMode, "auto");
+
+    response = await app.inject({
+      method: "PUT",
+      url: "/api/agents/cursor/config",
+      payload: { connectionMode: "acp" },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().agent.settings.connectionMode, "acp");
 
     response = await app.inject({
       method: "PUT",

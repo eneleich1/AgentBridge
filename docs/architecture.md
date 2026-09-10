@@ -79,3 +79,35 @@ The intended boundary consists of:
 - an allowlist of project directories;
 - no arbitrary shell-command endpoint;
 - review of generated changes before deployment.
+
+## Unified agent connections
+
+The orchestration layer communicates through a connector contract rather than
+directly through a provider CLI. A connection owns protocol negotiation,
+transport, provider session identifiers, cancellation, permissions, and the
+translation of provider output into normalized `AgentEvent` values. AgentBridge
+continues to own the browser UI, its own session ID, persistence, projects,
+voice input, comparison, and remote access.
+
+The current command adapters are preserved in `AgentBridgeProtocolConnection`.
+They remain the compatibility fallback for providers that do not expose a
+native protocol. `ACPConnection` is provider-neutral JSON-RPC over stdio; the
+Cursor configuration simply supplies `agent acp`. `OpenAICompatibleConnection`
+is the local HTTP extension point for Ollama, LM Studio, vLLM, and similar
+servers. A native SDK mode is deliberately an extension point until there is a
+real SDK integration to register.
+
+Connection mode, protocol, and transport are separate fields. For example,
+Cursor can use `auto` mode, select ACP as protocol, and use stdio as transport;
+Codex can use the AgentBridge protocol over a process transport. The selected
+protocol and the provider session ID are persisted on the AgentBridge session
+without replacing its stable AgentBridge session ID.
+
+### ACP and MCP have different jobs
+
+ACP is the client-to-coding-agent protocol. AgentBridge uses it to create or
+resume a session, send prompts, stream updates, request permission decisions,
+and cancel work. MCP is not a replacement for ACP: it is the tool/context
+protocol used by an agent to reach tools, databases, and other services. An ACP
+agent may itself use MCP servers, but raw ACP or MCP messages are never exposed
+as the web UI contract; connectors translate them into normalized events.

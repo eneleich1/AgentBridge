@@ -177,6 +177,41 @@ const AGENT_GUIDES = {
       },
     ],
   },
+  local: {
+    name: "Local Model",
+    steps: [
+      {
+        title: "Detect local endpoint",
+        body: "AgentBridge checks the OpenAI-compatible endpoint from this backend PC. Ollama works through its v1 compatibility API.",
+        checks: "AgentBridge requests GET /v1/models from the configured endpoint.",
+        manualCommand: "Invoke-RestMethod http://127.0.0.1:11434/v1/models",
+        installTitle: "If it is unavailable",
+        installSteps: ["Start Ollama, LM Studio, vLLM, or another local server on the backend PC.", "Confirm the endpoint and port below match that server.", "Press Test again."],
+        installCommand: "ollama serve\nollama pull gpt-oss-20b",
+        failHints: { not_ready: ["The local endpoint could not be reached. Start the model server, verify its port, and press Test again."] },
+      },
+      {
+        title: "Verify model API",
+        body: "The connector uses the standard Chat Completions contract, not a provider-specific CLI.",
+        checks: "The endpoint must expose /v1/chat/completions.",
+        manualCommand: "Invoke-RestMethod http://127.0.0.1:11434/v1/models",
+        installTitle: "If the endpoint is not compatible",
+        installSteps: ["Use an OpenAI-compatible endpoint, or point Ollama at its /v1 endpoint.", "Set a model available on that server."],
+        installCommand: "ollama list",
+        failHints: { not_ready: ["The endpoint did not report ready. Confirm it supports the OpenAI-compatible v1 API."] },
+      },
+      {
+        title: "Confirm local worker",
+        body: "Once saved, this local model can use the same sessions, voice prompts, comparison workflow, and remote UI as CLI agents.",
+        checks: "AgentBridge confirms the endpoint is reachable before saving.",
+        manualCommand: "ollama list",
+        installTitle: "Ready to save",
+        installSteps: ["Keep the local server running on the backend PC.", "Choose the exact model name exposed by the server.", "Save this configuration."],
+        installCommand: "ollama pull gpt-oss-20b",
+        failHints: { not_ready: ["Start the endpoint and press Test before saving."] },
+      },
+    ],
+  },
 };
 
 function statusText(info) {
@@ -229,7 +264,11 @@ export default function AgentSetupWizard({
 
   const [stepIndex, setStepIndex] = useState(0);
   const [localStatus, setLocalStatus] = useState(setupStatus || null);
-  const [selectedModel, setSelectedModel] = useState(agentConfig?.settings?.model || DEFAULT_CODEX_MODEL);
+  const [selectedModel, setSelectedModel] = useState(agentConfig?.settings?.model || (agent === "local" ? "gpt-oss-20b" : DEFAULT_CODEX_MODEL));
+  const [localEndpoint, setLocalEndpoint] = useState(agentConfig?.settings?.endpoint || "http://127.0.0.1:11434/v1");
+  const [connectionMode, setConnectionMode] = useState(
+    agentConfig?.settings?.connectionMode || (agent === "local" ? "ollama_http" : agent === "cursor" ? "auto" : "agentbridge_protocol")
+  );
   const [checking, setChecking] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
@@ -261,6 +300,14 @@ export default function AgentSetupWizard({
     setChecking(true);
     resetStepResult();
     try {
+      if (agent === "local" && onSaveAgentConfig) {
+        await onSaveAgentConfig(agent, {
+          configured: false,
+          model: selectedModel.trim(),
+          endpoint: localEndpoint.trim(),
+          connectionMode,
+        });
+      }
       const nextStatus = await api.refreshSetupStatus();
       setLocalStatus(nextStatus);
       if (onRefresh) await onRefresh();
@@ -307,8 +354,10 @@ export default function AgentSetupWizard({
     setError("");
     try {
       const settings = agent === "codex"
-        ? { configured: true, model: selectedModel }
-        : { configured: true };
+        ? { configured: true, model: selectedModel, connectionMode }
+        : agent === "local"
+          ? { configured: true, model: selectedModel, endpoint: localEndpoint.trim(), connectionMode }
+        : { configured: true, connectionMode };
       await onSaveAgentConfig(agent, settings);
       setLocalStatus((current) => ({
         ...(current || setupStatus || {}),
@@ -392,6 +441,43 @@ export default function AgentSetupWizard({
             </div>
           </div>
         )}
+
+        {agent === "local" && (
+          <div className="wizard-step-card">
+            <strong>Local endpoint and model</strong>
+            <p>Use an Ollama /v1 endpoint or any OpenAI-compatible server running on this PC.</p>
+            <div className="wizard-form-row">
+              <input value={localEndpoint} onChange={(e) => setLocalEndpoint(e.target.value)} placeholder="http://127.0.0.1:11434/v1" />
+              <input value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} placeholder="gpt-oss-20b" />
+            </div>
+          </div>
+        )}
+
+        <div className="wizard-step-card">
+          <strong>Connection method</strong>
+          <p>
+            AgentBridge keeps the agent and model separate from the way it communicates with the agent.
+            Auto uses the recommended protocol and retains the current AgentBridge CLI protocol as a fallback.
+          </p>
+          <div className="wizard-form-row">
+            <select value={connectionMode} onChange={(e) => setConnectionMode(e.target.value)}>
+              <option value="auto">Auto (recommended)</option>
+              {agent === "cursor" && <option value="acp">ACP / stdio</option>}
+              {agent === "local" && <option value="ollama_http">Ollama / OpenAI-compatible HTTP</option>}
+              {agent === "local" && <option value="openai_compatible">OpenAI-compatible HTTP</option>}
+              {agent !== "local" && <option value="agentbridge_protocol">AgentBridge CLI Protocol</option>}
+            </select>
+          </div>
+          <p className="wizard-guide-label">
+            {connectionMode === "acp"
+              ? "ACP uses JSON-RPC over the agent process standard input and output."
+              : connectionMode === "agentbridge_protocol"
+                ? "Uses the existing command-line adapter for this agent."
+                : agent === "cursor"
+                  ? "Auto tries ACP first, then falls back to the current Cursor CLI adapter if ACP cannot connect."
+                  : "Auto selects the current supported protocol for this agent."}
+          </p>
+        </div>
 
         {step && (
           <div className="wizard-step-card">

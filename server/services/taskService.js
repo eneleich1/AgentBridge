@@ -3,7 +3,13 @@ const path = require("path");
 const Database = require("better-sqlite3");
 const { v4: uuidv4 } = require("uuid");
 const { parseAgentError } = require("../utils/agentErrors");
-const { getAgent, getMaxConcurrency } = require("../agents/agentFactory");
+const {
+  getMaxConcurrency,
+  createAgentConnection,
+  createAgentFallbackConnection,
+  getAgentConnectionConfig,
+} = require("../agents/agentFactory");
+const { ConnectionMode, AgentEventType } = require("../connections/types");
 const setupService = require("./setupService");
 const projectService = require("./projectService");
 const logService = require("./logService");
@@ -258,6 +264,55 @@ function processQueue() {
   }
 }
 
+async function runTaskThroughConnection(task, signal, handlers) {
+  const config = getAgentConnectionConfig(task.agentType);
+  let connection;
+  try {
+    connection = createAgentConnection(task.agentType);
+    await connection.connect({ cwd: task.projectPath });
+  } catch (error) {
+    if (config.connectionMode !== ConnectionMode.AUTO) throw error;
+    handlers.onStderr?.(`Auto connection fallback: ${error.message}\n`);
+    connection = createAgentFallbackConnection(task.agentType);
+    await connection.connect({ cwd: task.projectPath });
+  }
+  let providerSession;
+  try {
+    providerSession = await connection.createSession({
+      sessionId: task.id,
+      projectPath: task.projectPath,
+      mode: "execute",
+    });
+  } catch (error) {
+    if (config.connectionMode !== ConnectionMode.AUTO) throw error;
+    handlers.onStderr?.(`Auto connection fallback during session setup: ${error.message}\n`);
+    await connection.closeSession().catch(() => {});
+    connection = createAgentFallbackConnection(task.agentType);
+    await connection.connect({ cwd: task.projectPath });
+    providerSession = await connection.createSession({
+      sessionId: task.id,
+      projectPath: task.projectPath,
+      mode: "execute",
+    });
+  }
+  let result = { exitCode: 0, cancelled: false };
+  for await (const event of connection.sendPrompt({
+    projectPath: task.projectPath,
+    prompt: task.prompt,
+    mode: "execute",
+    attachments: task.attachments || [],
+    providerSessionId: providerSession.providerSessionId,
+    signal,
+  })) {
+    if (event.type === AgentEventType.TEXT_DELTA) handlers.onStdout?.(event.text || "");
+    else if (event.type === AgentEventType.RAW && event.stream === "stderr") handlers.onStderr?.(event.text || "");
+    else if (event.type === AgentEventType.COMPLETED) result = event.result || result;
+    else if (event.type === AgentEventType.ERROR) throw event.error || new Error("Agent connector failed.");
+  }
+  await connection.closeSession({ providerSessionId: providerSession.providerSessionId }).catch(() => {});
+  return result;
+}
+
 async function executeTask(taskId) {
   const task = getTaskById(taskId);
   if (!task || task.status !== "queued") return;
@@ -284,17 +339,12 @@ async function executeTask(taskId) {
   emitTaskEvent("task:started", running);
 
   try {
-    const agent = getAgent(task.agentType);
-    const result = await agent.run({
-      projectPath: task.projectPath,
-      prompt: task.prompt,
-      signal: abortController.signal,
+    const result = await runTaskThroughConnection(task, abortController.signal, {
       onStdout: (text) => {
         stdout += text;
         logService.appendLog(taskId, "stdout", text);
         emitTaskEvent("task:output", getTaskById(taskId), { stream: "stdout", text });
       },
-      attachments: task.attachments || [],
       onStderr: (text) => {
         stderr += text;
         logService.appendLog(taskId, "stderr", text);

@@ -47,6 +47,22 @@ async function sessionsRoutes(fastify) {
     return { session };
   });
 
+  fastify.post("/api/sessions/:sessionId/permissions/:requestId", async (request, reply) => {
+    try {
+      const session = await sessionManager.respondToPermission(
+        request.params.sessionId,
+        request.params.requestId,
+        request.body || {}
+      );
+      return { session };
+    } catch (error) {
+      return reply.code(error.code === "permission_not_found" ? 404 : 400).send({
+        error: error.message,
+        code: error.code,
+      });
+    }
+  });
+
   fastify.patch("/api/sessions/:sessionId/mode", async (request, reply) => {
     try {
       const session = sessionManager.setSessionMode(

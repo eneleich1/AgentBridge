@@ -1,6 +1,6 @@
 const projectService = require("./projectService");
 const { diagnoseCursor, diagnoseCodex } = require("../agents/diagnostics");
-const { getAgentDuelSettings, isAgentConfigured } = require("../agents/agentFactory");
+const { getAgentDuelSettings, isAgentConfigured, getAgentConnectionConfig } = require("../agents/agentFactory");
 
 const VERSION = require("../../package.json").version;
 const SETUP_CACHE_TTL_MS = 10000;
@@ -12,6 +12,38 @@ let setupCache = {
 let setupInFlight = null;
 let setupGeneration = 0;
 
+async function diagnoseLocalModel() {
+  const connection = getAgentConnectionConfig("local");
+  const endpoint = connection.endpoint;
+  if (!endpoint) {
+    return { installed: false, authenticated: false, status: "missing", message: "Configure a local model endpoint." };
+  }
+  const modelsUrl = `${String(endpoint).replace(/\/$/, "").replace(/\/v1$/i, "")}/v1/models`;
+  try {
+    const response = await fetch(modelsUrl, { signal: AbortSignal.timeout(4000) });
+    if (!response.ok) {
+      return { installed: true, authenticated: false, status: "not_ready", message: `Local endpoint responded with HTTP ${response.status}.` };
+    }
+    const payload = await response.json().catch(() => ({}));
+    const models = Array.isArray(payload.data) ? payload.data.map((model) => model.id).filter(Boolean) : [];
+    return {
+      installed: true,
+      authenticated: true,
+      status: "ready",
+      version: models.length ? `${models.length} model${models.length === 1 ? "" : "s"}` : "Connected",
+      models,
+      message: "Local OpenAI-compatible endpoint is ready.",
+    };
+  } catch (error) {
+    return {
+      installed: false,
+      authenticated: false,
+      status: "not_ready",
+      message: `Cannot reach local model endpoint: ${error.message}`,
+    };
+  }
+}
+
 function getHealth() {
   return {
     ok: true,
@@ -20,21 +52,29 @@ function getHealth() {
   };
 }
 
-function buildSetupStatus(cursor, codex) {
+function buildSetupStatus(cursor, codex, local) {
   const projects = projectService.listProjects();
   const hasProject = projects.length > 0;
   const cursorStatus = {
     ...cursor,
     configured: isAgentConfigured("cursor"),
+    connection: getAgentConnectionConfig("cursor"),
   };
   const codexStatus = {
     ...codex,
     configured: isAgentConfigured("codex"),
+    connection: getAgentConnectionConfig("codex"),
+  };
+  const localStatus = {
+    ...local,
+    configured: isAgentConfigured("local"),
+    connection: getAgentConnectionConfig("local"),
   };
   const duelSettings = getAgentDuelSettings();
   const hasReadyAgent =
     (cursorStatus.configured && cursorStatus.status === "ready") ||
-    (codexStatus.configured && codexStatus.status === "ready");
+    (codexStatus.configured && codexStatus.status === "ready") ||
+    (localStatus.configured && localStatus.status === "ready");
   const duelStatus = {
     enabled: duelSettings.enabled,
     canEnable: duelSettings.canEnable,
@@ -58,6 +98,7 @@ function buildSetupStatus(cursor, codex) {
   return {
     cursor: cursorStatus,
     codex: codexStatus,
+    local: localStatus,
     duel: duelStatus,
     projects,
     setupComplete: hasProject && hasReadyAgent,
@@ -87,9 +128,9 @@ async function getSetupStatus(options = {}) {
   }
 
   const requestGeneration = setupGeneration;
-  const request = Promise.all([diagnoseCursor(), diagnoseCodex()])
-    .then(([cursor, codex]) => {
-      const status = buildSetupStatus(cursor, codex);
+  const request = Promise.all([diagnoseCursor(), diagnoseCodex(), diagnoseLocalModel()])
+    .then(([cursor, codex, local]) => {
+      const status = buildSetupStatus(cursor, codex, local);
       if (requestGeneration === setupGeneration) {
         setupCache = {
           value: status,
@@ -115,6 +156,9 @@ function isAgentReady(agentType, setupStatus) {
   }
   if (agentType === "codex") {
     return setupStatus.codex.configured !== false && setupStatus.codex.status === "ready";
+  }
+  if (agentType === "local") {
+    return setupStatus.local.configured !== false && setupStatus.local.status === "ready";
   }
   if (agentType === "duel") {
     return setupStatus.duel?.enabled === true &&
@@ -147,7 +191,7 @@ async function assertCanRunTask({ agentType, projectId }) {
       agentInfo?.configured === false
         ? agentType === "duel"
           ? "Configure both Codex CLI and Cursor Agent in AgentBridge settings before starting Agent Duel."
-          : `Configure ${agentType === "codex" ? "Codex CLI" : "Cursor Agent"} in AgentBridge settings before running tasks.`
+          : `Configure ${agentType === "codex" ? "Codex CLI" : agentType === "local" ? "Local Model" : "Cursor Agent"} in AgentBridge settings before running tasks.`
         : agentInfo?.message || `${agentType} is not ready on the desktop.`
     );
     err.code = agentInfo?.configured === false ? "agent_not_configured" : "agent_not_ready";
