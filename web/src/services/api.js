@@ -214,6 +214,32 @@ export const api = {
     return request("/api/setup/status?refresh=1", {}, serverUrl);
   },
 
+  getNotificationStatus(serverUrl = null) {
+    return request("/api/notifications/status", {}, serverUrl);
+  },
+
+  getPushPublicKey(serverUrl = null) {
+    return request("/api/notifications/vapid-public-key", {}, serverUrl);
+  },
+
+  savePushSubscription(subscription, serverUrl = null) {
+    return request("/api/notifications/subscriptions", {
+      method: "POST",
+      body: JSON.stringify(subscription),
+    }, serverUrl);
+  },
+
+  removePushSubscription(endpoint, serverUrl = null) {
+    return request("/api/notifications/subscriptions", {
+      method: "DELETE",
+      body: JSON.stringify({ endpoint }),
+    }, serverUrl);
+  },
+
+  sendPushNotificationTest(serverUrl = null) {
+    return request("/api/notifications/test", { method: "POST" }, serverUrl);
+  },
+
   getSystemMetrics(serverUrl = null) {
     return request("/api/system-metrics", {}, serverUrl);
   },

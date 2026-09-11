@@ -8,6 +8,7 @@ const { getAccessToken } = require("./agents/agentFactory");
 const { refreshProcessPath } = require("./agents/cliPath");
 const setupService = require("./services/setupService");
 const taskService = require("./services/taskService");
+const notificationService = require("./services/notificationService");
 const sessionManager = require("./sessions/sessionManager");
 const { registerClient } = require("./realtime/websocket");
 
@@ -18,6 +19,7 @@ const tasksRoutes = require("./routes/tasks.routes");
 const sessionsRoutes = require("./routes/sessions.routes");
 const messagesRoutes = require("./routes/messages.routes");
 const systemRoutes = require("./routes/system.routes");
+const notificationsRoutes = require("./routes/notifications.routes");
 
 const PORT = Number(process.env.PORT) || 3847;
 const HOST = process.env.HOST || "127.0.0.1";
@@ -75,6 +77,7 @@ function buildApp() {
   app.register(sessionsRoutes);
   app.register(messagesRoutes);
   app.register(systemRoutes);
+  app.register(notificationsRoutes);
 
   app.register(async (scoped) => {
     scoped.get("/ws", { websocket: true }, (socket) => {
@@ -104,6 +107,7 @@ async function start() {
   refreshProcessPath({ force: true });
   taskService.initDb();
   sessionManager.init();
+  notificationService.init();
   const app = buildApp();
 
   try {

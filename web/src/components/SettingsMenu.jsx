@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import ConfirmDialog from "./ConfirmDialog";
+import PushNotificationSettings from "./PushNotificationSettings";
 
 function statusText(info) {
   if (!info) return "Not checked";
@@ -221,6 +222,8 @@ export default function SettingsMenu({
           </div>
           {duelError && <div className="alert error">{duelError}</div>}
         </div>
+
+        <PushNotificationSettings />
 
         <div className="settings-section">
           <div className="settings-label">Default agent</div>

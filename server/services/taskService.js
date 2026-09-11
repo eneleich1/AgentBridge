@@ -15,6 +15,7 @@ const projectService = require("./projectService");
 const logService = require("./logService");
 const attachmentService = require("./attachmentService");
 const { broadcast } = require("../realtime/websocket");
+const notificationService = require("./notificationService");
 const { DATA_DIR } = require("../utils/runtimeConfig");
 
 const DB_PATH = path.join(DATA_DIR, "agentbridge.sqlite");
@@ -253,6 +254,7 @@ function deleteConversation(conversationId) {
 
 function emitTaskEvent(type, task, extra = {}) {
   broadcast({ type, task, ...extra });
+  notificationService.notifyTaskEvent(type, task);
 }
 
 function processQueue() {

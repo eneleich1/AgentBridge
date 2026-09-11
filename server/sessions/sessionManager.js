@@ -8,6 +8,7 @@ const logService = require("../services/logService");
 const attachmentService = require("../services/attachmentService");
 const { getAgentDuelSettings, getMaxConcurrency, getAgentConnectionConfig } = require("../agents/agentFactory");
 const { broadcast } = require("../realtime/websocket");
+const notificationService = require("../services/notificationService");
 const { DATA_DIR } = require("../utils/runtimeConfig");
 const { AgentSession } = require("./agentSession");
 
@@ -886,6 +887,7 @@ class SessionManager {
       session,
       payload,
     });
+    notificationService.notifySessionEvent(type, session, payload);
   }
 
   registerPermissionRequest(sessionId, requestId, connection) {

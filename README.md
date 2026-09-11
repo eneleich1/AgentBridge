@@ -245,6 +245,9 @@ Important environment variables:
 | `HOST` | `127.0.0.1` | Backend bind address |
 | `PORT` | `3847` | Backend port |
 | `AGENTBRIDGE_ACCESS_TOKEN` | Empty | Bearer token for HTTP and WebSocket access |
+| `AGENTBRIDGE_VAPID_SUBJECT` | `mailto:admin@agentbridge.local` | Contact value used by Web Push |
+| `AGENTBRIDGE_VAPID_PUBLIC_KEY` | Generated automatically | Optional stable Web Push public key |
+| `AGENTBRIDGE_VAPID_PRIVATE_KEY` | Generated automatically | Optional stable Web Push private key |
 | `AGENTBRIDGE_ALLOWED_ORIGINS` | Local Vite origins | Additional comma-separated browser origins |
 | `AGENTBRIDGE_DATA_DIR` | Repository `data/` | Private runtime data directory |
 
