@@ -1,5 +1,7 @@
 const { spawn } = require("child_process");
 const readline = require("readline");
+const { safeLaunch } = require("../agents/safeLaunch");
+const { killProcessTree } = require("../agents/runProcess");
 const { AsyncEventQueue } = require("./asyncEventQueue");
 const {
   AgentEventType,
@@ -62,13 +64,9 @@ class ACPConnection {
       : ["acp"];
     const env = { ...process.env, ...(this.config.environmentVariables || {}) };
 
-    // .cmd launchers need cmd.exe on Windows; normal executables remain direct.
-    const useCmd = process.platform === "win32" && /\.cmd$/i.test(executable);
-    this.child = useCmd
-      ? spawn("cmd.exe", ["/d", "/c", executable, ...args], {
-        cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
-      })
-      : spawn(executable, args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    // Resolve supported batch shims to their native runtime without a shell.
+    const launch = safeLaunch(executable, args);
+    this.child = spawn(launch.command, launch.args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
 
     this.child.on("error", (error) => this.failPending(error));
     this.child.on("exit", (code) => this.failPending(new Error(`ACP process exited (${code ?? "unknown"}).`)));
@@ -107,6 +105,7 @@ class ACPConnection {
       cwd: projectPath,
       mcpServers: [],
     });
+    this.sessionModes = result?.modes;
     return { providerSessionId: result?.sessionId || result?.id || null, raw: result };
   }
 
@@ -114,16 +113,25 @@ class ACPConnection {
     if (!providerSessionId) return this.createSession({ projectPath });
     const method = this.providerCapabilities.loadSession ? "session/load" : "session/resume";
     const result = await this.request(method, { sessionId: providerSessionId, cwd: projectPath });
+    this.sessionModes = result?.modes;
     return { providerSessionId: result?.sessionId || providerSessionId, raw: result };
   }
 
-  async *sendPrompt({ providerSessionId, prompt, attachments = [] }) {
+  async *sendPrompt({ providerSessionId, prompt, mode = "ask", attachments = [] }) {
     if (!providerSessionId) throw new Error("ACP session is required before sending a prompt.");
+    const modes = this.sessionModes?.availableModes || [];
+    const selectedMode = modes.find(item => item.id === mode || (mode === "execute" && item.id === "agent"));
+    if (selectedMode) {
+      await this.request("session/set_mode", { sessionId: providerSessionId, modeId: selectedMode.id });
+    } else if (mode !== "execute") {
+      throw new Error(`This ACP agent does not advertise a ${mode} mode. Select a connector with read-only support.`);
+    }
     const queue = new AsyncEventQueue();
     this.eventQueue = queue;
     const content = [{ type: "text", text: prompt }];
     for (const attachment of attachments) {
-      if (attachment?.dataUrl) content.push({ type: "image", data: attachment.dataUrl });
+      const match = /^data:(image\/[^;]+);base64,(.+)$/.exec(attachment?.dataUrl || "");
+      if (match) content.push({ type: "image", mimeType: match[1], data: match[2] });
     }
 
     this.request("session/prompt", { sessionId: providerSessionId, prompt: content })
@@ -150,13 +158,17 @@ class ACPConnection {
       error.code = "permission_not_found";
       throw error;
     }
+    if (!["approve", "reject"].includes(decision)) throw new Error("Invalid permission decision.");
+    const kind = decision === "approve" ? "allow_once" : "reject_once";
+    const selected = pending.params?.options?.find(option => option.kind === kind && (!optionId || option.optionId === optionId))?.optionId;
+    if (!selected) throw new Error("The agent did not offer this permission option.");
+    await this.respond(pending.id, { outcome: { outcome: "selected", optionId: selected } });
     this.pendingPermissions.delete(String(requestId));
-    const selected = optionId || (decision === "approve" ? "allow-once" : "reject-once");
-    this.respond(pending.id, { outcome: { outcome: "selected", optionId: selected } });
   }
 
   async cancel({ providerSessionId }) {
-    if (providerSessionId) await this.request("session/cancel", { sessionId: providerSessionId });
+    if (providerSessionId && this.child?.stdin?.writable) this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: providerSessionId } })}\n`);
+    await this.closeSession();
   }
 
   async getStatus() {
@@ -173,7 +185,8 @@ class ACPConnection {
   async closeSession() {
     if (!this.child || this.child.killed) return;
     this.child.stdin.end();
-    this.child.kill();
+    killProcessTree(this.child, spawn);
+    this.failPending(new Error("Agent connection closed."));
     this.child = null;
   }
 
@@ -182,9 +195,17 @@ class ACPConnection {
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params });
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = method === "session/prompt" ? null : setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Agent did not respond to ${method} within 30 seconds.`));
+      }, 30000);
+      this.pending.set(id, {
+        resolve: result => { clearTimeout(timer); resolve(result); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      });
       this.child.stdin.write(`${payload}\n`, (error) => {
         if (!error) return;
+        clearTimeout(timer);
         this.pending.delete(id);
         reject(error);
       });
@@ -192,7 +213,10 @@ class ACPConnection {
   }
 
   respond(id, result) {
-    if (this.child?.stdin?.writable) this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+    if (!this.child?.stdin?.writable) throw new Error("Agent disconnected before permission could be delivered.");
+    return new Promise((resolve, reject) => {
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`, error => error ? reject(error) : resolve());
+    });
   }
 
   handleLine(line) {
@@ -243,6 +267,7 @@ class ACPConnection {
   failPending(error) {
     for (const { reject } of this.pending.values()) reject(error);
     this.pending.clear();
+    this.pendingPermissions.clear();
   }
 }
 

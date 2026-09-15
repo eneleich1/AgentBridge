@@ -11,6 +11,7 @@ import AgentSetupWizard from "./components/AgentSetupWizard";
 import ProjectSetupWizard from "./components/ProjectSetupWizard";
 import BackendSetupWizard from "./components/BackendSetupWizard";
 import SystemMetricsPanel from "./components/SystemMetricsPanel";
+import AccountMenu from "./components/AccountMenu";
 import ConfirmDialog from "./components/ConfirmDialog";
 
 function formatRefreshError(err) {
@@ -145,7 +146,8 @@ export default function App() {
   const [systemMetrics, setSystemMetrics] = useState(null);
   const [systemMetricsVisible, setSystemMetricsVisible] = useState(api.getSystemMetricsVisible());
   const [theme, setThemeState] = useState(api.getTheme());
-  const [pendingPermission, setPendingPermission] = useState(null);
+  const [pendingPermissions, setPendingPermissions] = useState([]);
+  const pendingPermission = pendingPermissions[0] || null;
   const [resolvingPermission, setResolvingPermission] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -383,7 +385,13 @@ export default function App() {
   }
 
   useEffect(() => {
-    const ws = connectWebSocket((msg) => {
+    let cancelled = false;
+    let socket = null;
+    let reconnectTimer = null;
+    let reconnectDelayMs = 1000;
+    let hasConnectedBefore = false;
+
+    function handleSocketMessage(msg) {
       if (msg.type === "connected") {
         setWsStatus("connected");
         return;
@@ -433,16 +441,20 @@ export default function App() {
         queueDuelOutput(msg.payload);
       }
 
-      if (msg.type === "permission_requested" && msg.payload?.requestId) {
-        setPendingPermission({
+      if (msg.type === "permissions_snapshot") {
+        setPendingPermissions(msg.payload?.permissions || []);
+      }
+      if (msg.type === "permission_requested" && msg.payload?.requestId != null) {
+        const permission = {
           sessionId: msg.sessionId,
           requestId: msg.payload.requestId,
           permission: msg.payload.permission || {},
-        });
+        };
+        setPendingPermissions(current => [...current.filter(item => item.sessionId !== permission.sessionId || item.requestId !== permission.requestId), permission]);
       }
 
       if (msg.type === "permission_resolved" && msg.payload?.requestId) {
-        setPendingPermission((current) => current?.requestId === msg.payload.requestId ? null : current);
+        setPendingPermissions(current => current.filter(item => item.sessionId !== msg.sessionId || item.requestId !== msg.payload.requestId));
       }
 
       if ((msg.type === "agent_error" || msg.type === "session_completed") && msg.payload?.message) {
@@ -482,19 +494,43 @@ export default function App() {
           resetDraft(selectedProjectId);
         }
       }
-    });
+    }
 
-    ws.onopen = () => setWsStatus("connected");
-    ws.onclose = () => setWsStatus("disconnected");
+    function connect() {
+      if (cancelled) return;
+      socket = connectWebSocket(handleSocketMessage);
+      socket.onopen = () => {
+        setWsStatus("connected");
+        reconnectDelayMs = 1000;
+        // A dropped connection can silently miss updates (e.g. a task that
+        // finished while offline), so resync full state on every reconnect.
+        if (hasConnectedBefore) refresh();
+        hasConnectedBefore = true;
+      };
+      socket.onclose = () => {
+        if (cancelled) return;
+        setWsStatus("connecting");
+        reconnectTimer = window.setTimeout(connect, reconnectDelayMs);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15000);
+      };
+    }
+
+    connect();
+
     return () => {
+      cancelled = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (outputFlushTimerRef.current) {
         window.clearTimeout(outputFlushTimerRef.current);
         outputFlushTimerRef.current = null;
       }
       pendingOutputRef.current = new Map();
-      ws.close();
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
     };
-  }, [backendUrl, selectedProjectId]);
+  }, [backendUrl, selectedProjectId, refresh]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end" });
@@ -866,7 +902,7 @@ export default function App() {
         pendingPermission.requestId,
         { decision }
       );
-      setPendingPermission(null);
+      setPendingPermissions(current => current.filter(item => item.sessionId !== pendingPermission.sessionId || item.requestId !== pendingPermission.requestId));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1042,6 +1078,7 @@ export default function App() {
       <main className="main-panel">
         {!isMobile && (
           <div className="system-metrics-dock">
+            <AccountMenu />
             <SystemMetricsPanel
               metrics={systemMetrics}
               visible={systemMetricsVisible}
@@ -1218,11 +1255,16 @@ export default function App() {
 
       {pendingPermission && (
         <ConfirmDialog
-          title="Agent permission required"
+          title={`Agent permission required (${pendingPermissions.length} pending)`}
           message={
+            [sessions.find(session => session.id === pendingPermission.sessionId)?.projectName,
+            pendingPermission.permission?.toolCall?.title,
             pendingPermission.permission?.message ||
             pendingPermission.permission?.description ||
-            "The connected agent requested permission to continue. Review the requested action before approving it."
+            pendingPermission.permission?.toolCall?.content?.map(item => item.content?.text || "").join("\n"),
+            pendingPermission.permission?.details,
+            error ? `Error: ${error}` : ""].filter(Boolean).join("\n\n") ||
+            "The connected agent requested permission to continue."
           }
           confirmLabel="Allow once"
           cancelLabel="Reject"

@@ -39,38 +39,25 @@ npm ci --prefix web
 
 ## Run in development mode
 
-Development mode uses two terminals and is intended for development on the
-same computer. In this mode, the backend and frontend use different ports. Do
-not point a single Cloudflare Tunnel at port `3847` and expect it to serve the
-interface: the development interface is served separately on port `5173`.
-
-### Terminal 1: backend
+Development mode is intended for development on the same computer. In this
+mode, the backend and frontend use different ports. Do not point a single
+Cloudflare Tunnel at port `3847` and expect it to serve the interface: the
+development interface is served separately, normally on port `5173`.
 
 ```powershell
 cd C:\path\to\AgentBridgeFramework
 npm run dev
 ```
 
-The backend will be available at:
+This starts the backend with file watching at `http://127.0.0.1:3847` and the
+Vite frontend, and prints both addresses. The frontend uses port `5173` when it
+is available. If Windows has reserved that port (a common cause of
+`listen EACCES: permission denied ::1:5173`), the launcher picks the next free
+port, allows it through CORS, and points the frontend at the backend. Set
+`AGENTBRIDGE_WEB_PORT` to force a specific frontend port.
 
-```text
-http://127.0.0.1:3847
-```
-
-### Terminal 2: frontend
-
-```powershell
-cd C:\path\to\AgentBridgeFramework
-npm run dev:web
-```
-
-Open the development interface at:
-
-```text
-http://localhost:5173
-```
-
-The development frontend communicates with the backend on port `3847`.
+Press Ctrl+C to stop both processes. To run them in separate terminals instead,
+use `npm run dev:server` and `npm run dev:web`.
 
 ## Run the compiled application
 
@@ -163,8 +150,9 @@ their contents.
 | Command | Description |
 | --- | --- |
 | `npm start` | Start the backend |
-| `npm run dev` | Start the backend with file watching |
-| `npm run dev:web` | Start the Vite frontend |
+| `npm run dev` | Start the backend with file watching and the Vite frontend |
+| `npm run dev:server` | Start only the backend with file watching |
+| `npm run dev:web` | Start only the Vite frontend |
 | `npm run build:web` | Build the frontend |
 | `npm test` | Run the automated tests |
 | `npm run audit:public` | Scan for common publication risks |

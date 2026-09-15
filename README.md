@@ -124,7 +124,9 @@ also runs in its read-only sandbox for duel rounds.
 
 ## Requirements
 
-- Node.js 20 or newer. Fastify 5 does not support Node.js 18.
+- Node.js 20 or newer. Fastify 5 does not support Node.js 18. Avoid Node.js
+  24.19.0: its `ObjectWrap` cleanup-hook change makes `better-sqlite3` crash
+  intermittently with `RemoveEnvironmentCleanupHook ... (env) != nullptr`.
 - npm.
 - Windows for the currently tested process-management behavior.
 - Codex CLI, Cursor Agent CLI, or both installed on the backend machine.
@@ -191,27 +193,33 @@ token or an authenticated access proxy; do not expose an unprotected backend.
 
 ## Development
 
-Run the backend and frontend in separate terminals:
+Start the backend (watch mode) and the Vite frontend with one command:
 
 ```powershell
 npm run dev
 ```
 
-```powershell
-npm run dev:web
-```
+The launcher prefixes each process's output with `[server]` or `[web]` and stops
+both when either exits or when you press Ctrl+C. The frontend prefers port
+`5173`; if Windows has reserved it (Hyper-V, WSL, and Docker commonly reserve
+port ranges, which makes Vite fail with `EACCES`), the next free port is used
+and printed at startup. Set `AGENTBRIDGE_WEB_PORT` to force a specific port.
+The launcher also adds the chosen frontend origin to
+`AGENTBRIDGE_ALLOWED_ORIGINS` and points the frontend at the backend unless
+`VITE_AGENTBRIDGE_API_ORIGIN` is already configured.
 
-The development origins `http://localhost:5173` and
-`http://127.0.0.1:5173` are allowed by default. Add other trusted origins to
-`AGENTBRIDGE_ALLOWED_ORIGINS`.
+Use `npm run dev:server` and `npm run dev:web` to run either side separately.
+The development origins `http://localhost:5173` and `http://127.0.0.1:5173` are
+allowed by default. Add other trusted origins to `AGENTBRIDGE_ALLOWED_ORIGINS`.
 
 Available commands:
 
 | Command | Purpose |
 | --- | --- |
 | `npm start` | Start the Fastify backend |
-| `npm run dev` | Start the backend in watch mode |
-| `npm run dev:web` | Start the Vite development server |
+| `npm run dev` | Start the backend in watch mode and the Vite development server together |
+| `npm run dev:server` | Start only the backend in watch mode |
+| `npm run dev:web` | Start only the Vite development server |
 | `npm run build:web` | Build the frontend |
 | `npm test` | Run process, Cursor adapter, configuration, route, session queue, and Agent Duel tests |
 | `npm run audit:public` | Scan tracked files for common publication risks |

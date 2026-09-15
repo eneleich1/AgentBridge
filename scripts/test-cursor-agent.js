@@ -18,7 +18,7 @@ function argsFor(mode) {
 function main() {
   const ask = argsFor("ask");
   assert.deepEqual(ask, [
-    "/d", "/c", "agent", "--print", "--trust", "--mode", "ask",
+    "--print", "--trust", "--mode", "ask",
     "--workspace", "C:\\projects\\NeedA", "Test prompt",
   ]);
   assert.equal(ask.includes("--force"), false);
@@ -28,10 +28,7 @@ function main() {
   assert.equal(plan.at(plan.indexOf("--mode") + 1), "plan");
   assert.equal(plan.includes("--force"), false);
 
-  const execute = argsFor("execute");
-  assert.equal(execute.includes("--trust"), true);
-  assert.equal(execute.includes("--force"), true);
-  assert.equal(execute.includes("--mode"), false);
+  assert.throws(() => argsFor("execute"), /requires ACP/);
 
   const fallback = argsFor("unexpected");
   assert.equal(fallback.at(fallback.indexOf("--mode") + 1), "ask");

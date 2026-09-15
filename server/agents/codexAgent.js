@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { runProcess } = require("./runProcess");
+const { safeLaunch } = require("./safeLaunch");
 const { refreshProcessPath, resolveCodexCommand } = require("./cliPath");
 
 function appendImageArgs(args, attachments) {
@@ -291,7 +292,6 @@ function createJsonlParser({ onEvent, onText, onRaw }) {
  */
 function createCodexAgent(options = {}) {
   const model = options.model || "gpt-5.6-sol";
-  const sandboxMode = options.sandboxMode || "workspace-write";
 
   return {
     id: "codex",
@@ -301,6 +301,7 @@ function createCodexAgent(options = {}) {
     async run({
       projectPath,
       prompt,
+      mode = "ask",
       attachments = [],
       nativeSessionId = null,
       onStdout,
@@ -313,10 +314,12 @@ function createCodexAgent(options = {}) {
         throw new Error(`Project path does not exist: ${resolved}`);
       }
 
+      const sandboxMode = mode === "execute" && options.sandboxMode !== "read-only" ? "workspace-write" : "read-only";
       const codexArgs = nativeSessionId
         ? appendImageArgs([
             "exec",
             "resume",
+            "-c", `sandbox_mode="${sandboxMode}"`,
             "--json",
             "--model",
             model,
@@ -334,7 +337,7 @@ function createCodexAgent(options = {}) {
 
       refreshProcessPath({ force: true });
       const codexCommand = resolveCodexCommand();
-      const args = ["/d", "/c", codexCommand, ...codexArgs];
+      const launch = safeLaunch(codexCommand, codexArgs);
       let visibleStdout = "";
       let rawStdout = "";
       let capturedNativeSessionId = nativeSessionId || null;
@@ -355,7 +358,7 @@ function createCodexAgent(options = {}) {
         },
       });
 
-      const result = await runProcess("cmd.exe", args, {
+      const result = await runProcess(launch.command, launch.args, {
         cwd: resolved,
         onStdout: (text) => parser.push(text),
         onStderr,

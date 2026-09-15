@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const crypto = require("node:crypto");
 const Fastify = require("fastify");
 const cors = require("@fastify/cors");
 const websocket = require("@fastify/websocket");
@@ -11,6 +12,7 @@ const taskService = require("./services/taskService");
 const notificationService = require("./services/notificationService");
 const sessionManager = require("./sessions/sessionManager");
 const { registerClient } = require("./realtime/websocket");
+const authService = require("./auth/authService");
 
 const setupRoutes = require("./routes/setup.routes");
 const agentsRoutes = require("./routes/agents.routes");
@@ -20,6 +22,7 @@ const sessionsRoutes = require("./routes/sessions.routes");
 const messagesRoutes = require("./routes/messages.routes");
 const systemRoutes = require("./routes/system.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
+const authRoutes = require("./routes/auth.routes");
 
 const PORT = Number(process.env.PORT) || 3847;
 const HOST = process.env.HOST || "127.0.0.1";
@@ -46,30 +49,51 @@ function isAllowedOrigin(origin, callback) {
 }
 
 function buildApp() {
-  const app = Fastify({ logger: true, bodyLimit: 25 * 1024 * 1024 });
+  const app = Fastify({ logger: {
+    redact: ["req.headers.authorization", "req.headers.cookie", "res.headers['set-cookie']"],
+    serializers: { req: request => ({ method: request.method, url: request.url?.split("?")[0], remoteAddress: request.ip }) },
+  }, bodyLimit: 25 * 1024 * 1024 });
 
   app.register(cors, { origin: isAllowedOrigin });
   app.register(websocket);
 
   app.addHook("onRequest", async (request, reply) => {
-    const token = getAccessToken();
-    if (!token) return;
+    const pathname = request.url.split("?")[0];
+    const isWebSocketRequest = pathname === "/ws";
+    const isGuardedRequest = pathname.startsWith("/api") || isWebSocketRequest;
+    if (!isGuardedRequest) return; // let the static SPA shell load without a token
 
-    const publicPaths = ["/health", "/api/health"];
-    if (publicPaths.includes(request.url.split("?")[0])) return;
+    const publicPaths = ["/health", "/api/health", "/api/auth/login", "/api/auth/status"];
+    if (publicPaths.includes(pathname)) return;
 
     const header = request.headers.authorization || "";
     const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;
     const queryToken = request.query?.token;
-    const isWebSocketRequest = request.url.split("?")[0] === "/ws";
+    const presentedToken = isWebSocketRequest ? bearer || queryToken : bearer;
 
-    if (bearer === token || (isWebSocketRequest && queryToken === token)) return;
+    if (await authService.isAccountConfigured()) {
+      if (presentedToken && authService.validateSession(presentedToken)) return;
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+
+    // No account configured yet: fall back to the legacy static access token
+    // (or no auth at all, if that isn't set either) so a fresh clone stays
+    // frictionless until `npm run setup:auth` is run.
+    const legacyToken = getAccessToken();
+    if (!legacyToken) {
+      if (["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.ip) && ["127.0.0.1", "::1", "localhost"].includes(HOST)) return;
+      return reply.code(503).send({ error: "Configure an account or access token before enabling remote access." });
+    }
+    const actual = crypto.createHash("sha256").update(String(presentedToken || "")).digest();
+    const expected = crypto.createHash("sha256").update(legacyToken).digest();
+    if (crypto.timingSafeEqual(actual, expected)) return;
 
     return reply.code(401).send({ error: "Unauthorized" });
   });
 
   app.get("/health", async () => setupService.getHealth());
 
+  app.register(authRoutes);
   app.register(setupRoutes);
   app.register(agentsRoutes);
   app.register(projectsRoutes);
@@ -83,6 +107,7 @@ function buildApp() {
     scoped.get("/ws", { websocket: true }, (socket) => {
       registerClient(socket);
       socket.send(JSON.stringify({ type: "connected" }));
+      socket.send(JSON.stringify({ type: "permissions_snapshot", payload: { permissions: sessionManager.listPendingPermissions() } }));
     });
   });
 

@@ -15,7 +15,9 @@ function saveProjectsConfig(config) {
 }
 
 function normalizePath(projectPath) {
-  return path.resolve(projectPath);
+  const resolved = path.resolve(projectPath);
+  const canonical = fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
 function listProjects() {
@@ -92,6 +94,10 @@ function validateProjectPath(projectPath) {
       path: resolved,
       message: `Path does not exist on the desktop: ${resolved}`,
     };
+  }
+
+  if (!fs.statSync(resolved).isDirectory()) {
+    return { valid: false, path: resolved, message: "Project path must be a directory." };
   }
 
   let readable = false;

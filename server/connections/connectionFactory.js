@@ -4,6 +4,7 @@ const { createDuelAgent } = require("../agents/duelAgent");
 const { resolveCursorAgentCommand } = require("../agents/cliPath");
 const { AgentBridgeProtocolConnection } = require("./agentBridgeProtocolConnection");
 const { ACPConnection } = require("./acpConnection");
+const { CodexConnection } = require("./codexConnection");
 const { OpenAICompatibleConnection } = require("./openAICompatibleConnection");
 const { ConnectionMode, AgentProtocol, AgentTransport, normalizeConnectionMode } = require("./types");
 
@@ -40,6 +41,7 @@ function buildConnectionConfig(agent, settings = {}) {
         transport: AgentTransport.STDIO,
         executablePath: settings.executablePath || resolveCursorAgentCommand(),
         arguments: settings.arguments?.length ? settings.arguments : ["acp"],
+        environmentVariables: settings.environmentVariables || {},
         authMethod: settings.authMethod === undefined ? "cursor_login" : settings.authMethod,
       },
       fallback: { protocol: AgentProtocol.AGENTBRIDGE, transport: AgentTransport.PROCESS },
@@ -69,7 +71,10 @@ class AgentConnectionFactory {
   create(agent, settings = {}, options = {}) {
     const config = buildConnectionConfig(agent, settings);
     const mode = config.connectionMode;
-    if (mode === ConnectionMode.ACP) return new ACPConnection({ config: config.acp });
+    if (agent.id === "codex" && [ConnectionMode.AUTO, ConnectionMode.AGENTBRIDGE_PROTOCOL, ConnectionMode.NATIVE_SDK].includes(mode)) {
+      return new CodexConnection({ config });
+    }
+    if (mode === ConnectionMode.ACP) return new ACPConnection({ config: config.acp || config });
     if (mode === ConnectionMode.OPENAI_COMPATIBLE || mode === ConnectionMode.OLLAMA_HTTP) {
       return new OpenAICompatibleConnection({ config, protocol: config.protocol });
     }

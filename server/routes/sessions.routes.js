@@ -1,6 +1,7 @@
 const sessionManager = require("../sessions/sessionManager");
 
 async function sessionsRoutes(fastify) {
+  fastify.get("/api/permissions", async () => ({ permissions: sessionManager.listPendingPermissions() }));
   fastify.post("/api/sessions", async (request, reply) => {
     const { projectId, agentType, mode } = request.body || {};
 

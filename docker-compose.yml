@@ -1,0 +1,21 @@
+services:
+  agentbridge-postgres:
+    image: postgres:16-alpine
+    container_name: agentbridge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${AGENTBRIDGE_PG_USER:-agentbridge}
+      POSTGRES_PASSWORD: ${AGENTBRIDGE_PG_PASSWORD:?set AGENTBRIDGE_PG_PASSWORD in .env}
+      POSTGRES_DB: ${AGENTBRIDGE_PG_DATABASE:-agentbridge}
+    ports:
+      - "127.0.0.1:${AGENTBRIDGE_PG_PORT:-5433}:5432"
+    volumes:
+      - agentbridge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AGENTBRIDGE_PG_USER:-agentbridge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  agentbridge_pgdata:

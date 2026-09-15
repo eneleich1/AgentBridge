@@ -1,21 +1,20 @@
 const fs = require("fs");
 const path = require("path");
 const { runProcess } = require("./runProcess");
+const { safeLaunch } = require("./safeLaunch");
 const { resolveCursorAgentCommand, refreshProcessPath } = require("./cliPath");
 
 /**
  * Cursor Agent CLI adapter.
  * Trust every non-interactive workspace explicitly. Ask/plan use Cursor's
- * read-only modes; execute omits --mode and force-approves tool calls.
+ * read-only modes. Interactive execution uses the ACP connector.
  */
 function buildCursorAgentArgs({ agentCommand, projectPath, prompt, mode = "ask" }) {
   const normalizedMode = String(mode || "ask").toLowerCase();
-  const args = ["/d", "/c", agentCommand, "--print", "--trust"];
+  const args = ["--print", "--trust"];
 
   if (normalizedMode === "execute") {
-    // Cursor CLI only accepts ask/plan as explicit --mode values. Its default
-    // --print mode has write/shell tools, and --force makes it headless.
-    args.push("--force");
+    throw new Error("Cursor Execute requires ACP so permission requests can be reviewed in AgentBridge. Enable the ACP connection and retry.");
   } else {
     args.push("--mode", normalizedMode === "plan" ? "plan" : "ask");
   }
@@ -44,7 +43,8 @@ function createCursorAgent() {
         mode,
       });
 
-      return runProcess("cmd.exe", args, {
+      const launch = safeLaunch(agentCommand, args);
+      return runProcess(launch.command, launch.args, {
         cwd: resolved,
         onStdout,
         onStderr,

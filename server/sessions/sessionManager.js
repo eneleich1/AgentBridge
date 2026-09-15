@@ -890,14 +890,32 @@ class SessionManager {
     notificationService.notifySessionEvent(type, session, payload);
   }
 
-  registerPermissionRequest(sessionId, requestId, connection) {
-    this.pendingPermissions.set(`${sessionId}:${requestId}`, { connection, createdAt: this.now() });
+  registerPermissionRequest(sessionId, requestId, connection, permission = {}) {
+    // Public ids are unique across reconnects, providers, and restarted processes.
+    const publicId = uuidv4();
+    this.pendingPermissions.set(`${sessionId}:${publicId}`, { connection, providerRequestId: requestId, sessionId, requestId: publicId, permission, createdAt: this.now() });
+    return publicId;
+  }
+
+  listPendingPermissions(sessionId = null) {
+    return [...this.pendingPermissions.values()].filter(item => !sessionId || item.sessionId === sessionId)
+      .map(({ connection, providerRequestId, ...item }) => item);
+  }
+
+  resolveProviderPermission(sessionId, providerRequestId, connection) {
+    for (const [key, pending] of this.pendingPermissions) {
+      if (pending.sessionId === sessionId && pending.connection === connection && String(pending.providerRequestId) === String(providerRequestId)) {
+        this.pendingPermissions.delete(key);
+        this.emitSessionEvent("permission_resolved", sessionId, { requestId: pending.requestId });
+      }
+    }
   }
 
   clearPermissionRequests(sessionId) {
     for (const key of this.pendingPermissions.keys()) {
       if (key.startsWith(`${sessionId}:`)) this.pendingPermissions.delete(key);
     }
+    this.emitSessionEvent("permissions_snapshot", sessionId, { permissions: this.listPendingPermissions() });
   }
 
   async respondToPermission(sessionId, requestId, { decision, optionId } = {}) {
@@ -907,7 +925,15 @@ class SessionManager {
       error.code = "permission_not_found";
       throw error;
     }
-    await pending.connection.respondToPermission({ requestId, decision, optionId });
+    if (pending.resolving) throw new Error("This permission request is already being answered.");
+    if (!["approve", "reject"].includes(decision)) throw new Error("Invalid permission decision.");
+    pending.resolving = true;
+    try {
+      await pending.connection.respondToPermission({ requestId: pending.providerRequestId, decision, optionId });
+    } catch (error) {
+      pending.resolving = false;
+      throw error;
+    }
     this.pendingPermissions.delete(`${sessionId}:${requestId}`);
     const session = this.getSessionById(sessionId);
     this.emitSessionEvent("permission_resolved", sessionId, { requestId, decision, optionId }, session);

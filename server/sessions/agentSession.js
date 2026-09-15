@@ -31,6 +31,8 @@ class AgentSession {
       await this.connection.connect({ cwd: this.session.projectPath });
       return this.connection;
     } catch (error) {
+      await this.connection?.closeSession().catch(() => {});
+      this.connection = null;
       if (config.connectionMode !== ConnectionMode.AUTO) throw error;
       this.manager.appendSessionLog(
         this.session.id,
@@ -168,14 +170,16 @@ class AgentSession {
       })) {
         if (event.type === AgentEventType.TEXT_DELTA) appendText(event.text, "stdout");
         else if (event.type === AgentEventType.PERMISSION_REQUESTED) {
-          this.manager.registerPermissionRequest(sessionId, event.requestId, activeConnection);
+          const requestId = this.manager.registerPermissionRequest(sessionId, event.requestId, activeConnection, event.permission);
           this.manager.emitSessionEvent("permission_requested", sessionId, {
             messageId: agentMessage.id,
-            requestId: event.requestId,
+            requestId,
             permission: event.permission,
           }, this.session);
           pendingRaw += `${JSON.stringify(event.raw || event.permission)}\n`;
           scheduleMessageFlush();
+        } else if (event.type === "permission_resolved") {
+          this.manager.resolveProviderPermission(sessionId, event.requestId, activeConnection);
         } else if (event.type === AgentEventType.RAW) {
           if (event.duelOutput) {
             const output = event.duelOutput;

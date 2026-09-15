@@ -297,9 +297,9 @@ The important sequence is:
 
 4. Open the generated `https://...trycloudflare.com` URL on the phone.
 
-Do not use a single tunnel to port `3847` while following the two-terminal
-development workflow (`npm run dev` plus `npm run dev:web`). In development,
-the interface is on `5173` and the backend is on `3847`. The compiled workflow
+Do not use a single tunnel to port `3847` while following the development
+workflow (`npm run dev`). In development, the interface is on `5173` (or the
+next free port) and the backend is on `3847`. The compiled workflow
 puts everything on `3847` and is why one Cloudflare URL works.
 
 If the Cloudflare URL displays `Route GET:/ not found`, stop the backend, run

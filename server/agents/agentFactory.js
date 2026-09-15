@@ -216,6 +216,11 @@ function updateAgentDuelSettings(nextSettings = {}) {
 }
 
 function updateAgentConfig(agentType, nextSettings = {}) {
+  for (const key of ["executablePath", "arguments", "environmentVariables", "authMethod"]) {
+    if (Object.hasOwn(nextSettings, key)) {
+      throw new Error(`${key} is administrator-only. Edit data/config/agents.json on the workstation.`);
+    }
+  }
   const config = loadAgentsConfig();
   const index = config.agents.findIndex((a) => a.id === agentType);
 

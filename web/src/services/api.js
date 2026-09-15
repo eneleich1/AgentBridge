@@ -167,6 +167,11 @@ async function request(path, options = {}, baseUrl = null) {
 
   const data = await response.json().catch(() => ({}));
 
+  if (response.status === 401 && !path.startsWith("/api/auth/")) {
+    setToken("");
+    window.dispatchEvent(new Event("agentbridge:unauthorized"));
+  }
+
   if (!response.ok) {
     const err = new Error(data.error || `Request failed (${response.status})`);
     err.code = data.code;
@@ -204,6 +209,42 @@ export const api = {
 
   getHealth(serverUrl = null) {
     return request("/api/health", {}, serverUrl);
+  },
+
+  getAuthStatus() {
+    return request("/api/auth/status");
+  },
+
+  checkSession() {
+    return request("/api/auth/session");
+  },
+
+  async login(username, password, totpToken) {
+    const data = await request("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password, totpToken }),
+    });
+    setToken(data.token);
+    return data;
+  },
+
+  async logout() {
+    try {
+      await request("/api/auth/logout", { method: "POST" });
+    } finally {
+      setToken("");
+    }
+  },
+
+  getAccount() {
+    return request("/api/auth/me");
+  },
+
+  changePassword(currentPassword, totpToken, newPassword) {
+    return request("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, totpToken, newPassword }),
+    });
   },
 
   getSetupStatus(serverUrl = null) {
