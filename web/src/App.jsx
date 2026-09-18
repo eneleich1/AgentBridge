@@ -82,6 +82,22 @@ function getAgentNotReadyMessage(agentType, setupStatus) {
   return null;
 }
 
+function parsePermissionDetails(details) {
+  if (!details) return null;
+  if (typeof details === "object") return details;
+  try {
+    const parsed = JSON.parse(details);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatPermissionDetail(value) {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
 const DEFAULT_AGENT_CONFIGS = {
   cursor: { id: "cursor", settings: { configured: false } },
   codex: { id: "codex", settings: { configured: false, model: DEFAULT_CODEX_MODEL } },
@@ -1037,6 +1053,24 @@ export default function App() {
     : setupStatus?.setupComplete
       ? "Disconnected"
       : "Needs Setup";
+  const permissionProject = pendingPermission
+    ? sessions.find(session => session.id === pendingPermission.sessionId)?.projectName
+    : "";
+  const permissionData = pendingPermission?.permission || {};
+  const permissionTitle = permissionData.toolCall?.title || "Agent action";
+  const permissionToolContent = Array.isArray(permissionData.toolCall?.content)
+    ? permissionData.toolCall.content.map(item => item.content?.text || "").filter(Boolean).join("\n")
+    : "";
+  const permissionMessage = permissionData.message ||
+    permissionData.description ||
+    permissionToolContent ||
+    "The connected agent requested permission to continue.";
+  const parsedPermissionDetails = parsePermissionDetails(permissionData.details);
+  const permissionDetailEntries = parsedPermissionDetails
+    ? Object.entries(parsedPermissionDetails).filter(([, value]) => value != null && value !== "" &&
+      (!Array.isArray(value) || value.length > 0) &&
+      (typeof value !== "object" || Array.isArray(value) || Object.keys(value).length > 0))
+    : [];
 
   return (
     <div className="shell">
@@ -1255,16 +1289,38 @@ export default function App() {
 
       {pendingPermission && (
         <ConfirmDialog
-          title={`Agent permission required (${pendingPermissions.length} pending)`}
+          className="permission-dialog"
+          title="Permission required"
           message={
-            [sessions.find(session => session.id === pendingPermission.sessionId)?.projectName,
-            pendingPermission.permission?.toolCall?.title,
-            pendingPermission.permission?.message ||
-            pendingPermission.permission?.description ||
-            pendingPermission.permission?.toolCall?.content?.map(item => item.content?.text || "").join("\n"),
-            pendingPermission.permission?.details,
-            error ? `Error: ${error}` : ""].filter(Boolean).join("\n\n") ||
-            "The connected agent requested permission to continue."
+            <div className="permission-dialog-content">
+              <div className="permission-dialog-meta">
+                <span>{permissionProject || "AgentBridge"}</span>
+                {pendingPermissions.length > 1 && (
+                  <span className="permission-pending-count">{pendingPermissions.length} pending</span>
+                )}
+              </div>
+              <section className="permission-request-card">
+                <span className="permission-section-label">{permissionTitle}</span>
+                <pre className="permission-command">{permissionMessage}</pre>
+              </section>
+              {(permissionDetailEntries.length > 0 || (permissionData.details && !parsedPermissionDetails)) && (
+                <details className="permission-details">
+                  <summary>Request details</summary>
+                  <div className="permission-details-list">
+                    {permissionDetailEntries.map(([key, value]) => (
+                      <div className="permission-detail" key={key}>
+                        <span>{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</span>
+                        <pre>{formatPermissionDetail(value)}</pre>
+                      </div>
+                    ))}
+                    {!parsedPermissionDetails && permissionData.details && (
+                      <pre className="permission-raw-details">{String(permissionData.details)}</pre>
+                    )}
+                  </div>
+                </details>
+              )}
+              {error && <div className="alert error permission-error">{error}</div>}
+            </div>
           }
           confirmLabel="Allow once"
           cancelLabel="Reject"

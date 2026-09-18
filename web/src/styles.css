@@ -1903,6 +1903,10 @@ body {
 
 .confirm-dialog {
   width: min(440px, 100%);
+  max-height: calc(100dvh - 2rem);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: #1f1f20;
   border: 1px solid #3f3f46;
   border-radius: 16px;
@@ -1925,8 +1929,114 @@ body {
 
 .confirm-dialog-message {
   margin: 0 0 1rem;
+  min-height: 0;
+  overflow: auto;
   color: #c4c4cb;
   line-height: 1.5;
+}
+
+.permission-dialog {
+  width: min(720px, 100%);
+}
+
+.permission-dialog-content {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.permission-dialog-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #a1a1aa;
+  font-size: 0.82rem;
+}
+
+.permission-pending-count {
+  flex: 0 0 auto;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid #3f3f46;
+  border-radius: 999px;
+  background: #27272a;
+  color: #d4d4d8;
+}
+
+.permission-request-card {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid #3f3f46;
+  border-radius: 10px;
+  background: #18181a;
+}
+
+.permission-section-label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #e4e4e7;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.permission-command,
+.permission-detail pre,
+.permission-raw-details {
+  margin: 0;
+  color: #d4d4d8;
+  font: 0.8rem/1.45 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.permission-command {
+  max-height: min(32dvh, 260px);
+  overflow: auto;
+}
+
+.permission-details {
+  border: 1px solid #35353a;
+  border-radius: 10px;
+  background: #232326;
+}
+
+.permission-details summary {
+  padding: 0.65rem 0.8rem;
+  color: #d4d4d8;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.permission-details-list {
+  display: grid;
+  gap: 0.75rem;
+  max-height: 30dvh;
+  overflow: auto;
+  padding: 0 0.8rem 0.8rem;
+}
+
+.permission-detail {
+  min-width: 0;
+}
+
+.permission-detail > span {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: #8f8f99;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.permission-error {
+  margin: 0;
+}
+
+.permission-dialog .agent-wizard-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid #333338;
 }
 
 .btn.danger,
@@ -2635,6 +2745,17 @@ body {
     border-radius: 24px 24px 0 0;
     padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
     align-self: end;
+  }
+
+  .confirm-dialog {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: 24px 24px 0 0;
+    padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  }
+
+  .permission-command {
+    max-height: 28dvh;
   }
 
   .mobile-metrics-section .system-metrics-shell {
