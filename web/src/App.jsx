@@ -151,6 +151,7 @@ export default function App() {
   const [agentChanging, setAgentChanging] = useState(false);
   const [modeChanging, setModeChanging] = useState(false);
   const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [liveReply, setLiveReply] = useState(null);
   const [wsStatus, setWsStatus] = useState("connecting");
   const [error, setError] = useState("");
@@ -175,6 +176,8 @@ export default function App() {
   const pendingOutputRef = useRef(new Map());
   const outputFlushTimerRef = useRef(null);
   const chatEndRef = useRef(null);
+  const activeSessionRef = useRef(null);
+  const cancelRequestedRef = useRef(false);
 
   function handleOpenSettings(anchorRect) {
     setSettingsAnchor(isMobile ? null : anchorRect);
@@ -184,6 +187,33 @@ export default function App() {
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
+
+  function markSessionBusy(busy) {
+    setRunning(Boolean(busy));
+    if (busy) setStarting(false);
+  }
+
+  function clearBusyState() {
+    setRunning(false);
+    setStarting(false);
+  }
+
+  async function cancelSessionById(sessionId) {
+    if (!sessionId) return null;
+    cancelRequestedRef.current = true;
+    sessionRequestIdRef.current += 1;
+    const { session } = await api.cancelSession(sessionId);
+    if (activeSessionRef.current?.id === sessionId) {
+      setActiveSession(session);
+      activeSessionRef.current = session;
+    }
+    clearBusyState();
+    return session;
+  }
 
   useEffect(() => {
     function handleResize() {
@@ -334,7 +364,7 @@ export default function App() {
     setAttachments([]);
     setError("");
     setIsDraft(true);
-    setRunning(false);
+    clearBusyState();
     setLiveReply(null);
     setAgent(api.getDefaultAgent());
     setMode("ask");
@@ -424,7 +454,7 @@ export default function App() {
         });
         if (msg.session.id === selectedSessionIdRef.current) {
           setActiveSession(msg.session);
-          setRunning(isSessionBusy(msg.session.status));
+          markSessionBusy(isSessionBusy(msg.session.status));
         }
       }
 
@@ -645,7 +675,7 @@ export default function App() {
     const preview = sessions.find((session) => session.id === sessionId);
     if (preview) {
       setActiveSession(preview);
-      setRunning(isSessionBusy(preview.status));
+      markSessionBusy(isSessionBusy(preview.status));
       setSelectedProjectId(preview.projectId || selectedProjectId);
       setAgent(preview.agentType || agent);
       setMode(preview.mode || "ask");
@@ -662,7 +692,7 @@ export default function App() {
       setActiveSession(session);
       setMessages(session.messages || []);
       setSelectedProjectId(session.projectId || selectedProjectId);
-      setRunning(isSessionBusy(session.status));
+      markSessionBusy(isSessionBusy(session.status));
       setAgent(session.agentType || agent);
       setMode(session.mode || "ask");
       setMobileMenuOpen(false);
@@ -728,15 +758,17 @@ export default function App() {
     const hadSession = Boolean(activeSession);
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
+    cancelRequestedRef.current = false;
 
     setError("");
     setPrompt("");
     setAttachments([]);
-    setRunning(true);
+    setStarting(true);
+    setRunning(false);
     setIsDraft(false);
 
     try {
-      let session = activeSession;
+      let session = activeSessionRef.current;
       if (!session) {
         const created = await api.createSession({
           projectId: selectedProjectId,
@@ -744,6 +776,7 @@ export default function App() {
           mode,
         });
         session = created.session;
+        activeSessionRef.current = session;
         setSessions((prev) => [buildSessionPreview(session), ...prev.filter((item) => item.id !== session.id)]);
         if (
           sessionRequestIdRef.current === requestId &&
@@ -755,14 +788,29 @@ export default function App() {
         }
       }
 
+      if (cancelRequestedRef.current) {
+        await cancelSessionById(session.id);
+        return;
+      }
+
       await api.createSessionMessage(session.id, {
         content: text,
         attachments: outgoingAttachments,
       });
       sessionDraftsRef.current.delete(session.id);
+
+      if (sessionRequestIdRef.current !== requestId) return;
+
+      if (cancelRequestedRef.current) {
+        await cancelSessionById(session.id);
+        return;
+      }
+
+      setStarting(false);
+      setRunning(true);
     } catch (err) {
       if (sessionRequestIdRef.current === requestId) {
-        setRunning(false);
+        clearBusyState();
         setPrompt(originalPrompt);
         setAttachments(outgoingAttachments);
         setError(err.message);
@@ -774,11 +822,14 @@ export default function App() {
   }
 
   async function handleLiveInterrupt() {
-    if (!activeSession?.id) return;
+    cancelRequestedRef.current = true;
+    const sessionId = activeSessionRef.current?.id;
+    if (!sessionId) {
+      clearBusyState();
+      return;
+    }
     try {
-      const { session } = await api.cancelSession(activeSession.id);
-      setActiveSession(session);
-      setRunning(false);
+      await cancelSessionById(sessionId);
     } catch (err) {
       setError(err.message);
       throw err;
@@ -801,24 +852,26 @@ export default function App() {
       throw new Error(notReadyMessage);
     }
 
-    if (running && activeSession?.id) {
+    if ((running || starting) && activeSessionRef.current?.id) {
       await handleLiveInterrupt();
     }
 
     const text = trimmedText;
-    const hadSession = Boolean(activeSession);
+    const hadSession = Boolean(activeSessionRef.current);
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
+    cancelRequestedRef.current = false;
 
     setError("");
     setPrompt("");
     setAttachments([]);
-    setRunning(true);
+    setStarting(true);
+    setRunning(false);
     setIsDraft(false);
     setLiveReply(null);
 
     try {
-      let session = activeSession;
+      let session = activeSessionRef.current;
       if (!session) {
         const created = await api.createSession({
           projectId: selectedProjectId,
@@ -826,19 +879,35 @@ export default function App() {
           mode,
         });
         session = created.session;
+        activeSessionRef.current = session;
         selectedSessionIdRef.current = session.id;
         setSelectedSessionId(session.id);
         setActiveSession(session);
         setSessions((prev) => [buildSessionPreview(session), ...prev.filter((item) => item.id !== session.id)]);
       }
 
+      if (cancelRequestedRef.current) {
+        await cancelSessionById(session.id);
+        return;
+      }
+
       await api.createSessionMessage(session.id, {
         content: text,
         attachments: [],
       });
+
+      if (sessionRequestIdRef.current !== requestId) return;
+
+      if (cancelRequestedRef.current) {
+        await cancelSessionById(session.id);
+        return;
+      }
+
+      setStarting(false);
+      setRunning(true);
     } catch (err) {
       if (sessionRequestIdRef.current === requestId) {
-        setRunning(false);
+        clearBusyState();
         if (!hadSession && !selectedSessionIdRef.current) {
           setIsDraft(true);
         }
@@ -849,7 +918,7 @@ export default function App() {
   }
 
   async function handleReplayUserMessage(message, nextContent) {
-    if (!activeSession?.id || running) return;
+    if (!activeSession?.id || running || starting) return;
 
     const notReadyMessage = getAgentNotReadyMessage(activeSession.agentType || agent, setupStatus);
     if (notReadyMessage) {
@@ -859,36 +928,51 @@ export default function App() {
 
     const requestId = sessionRequestIdRef.current + 1;
     sessionRequestIdRef.current = requestId;
+    cancelRequestedRef.current = false;
     setError("");
     setPrompt("");
     setAttachments([]);
-    setRunning(true);
+    setStarting(true);
+    setRunning(false);
 
     try {
       pendingOutputRef.current = new Map();
       const result = await api.replaySessionMessage(activeSession.id, message.id, {
         content: nextContent,
       });
+      if (sessionRequestIdRef.current !== requestId) return;
+
+      if (cancelRequestedRef.current) {
+        await cancelSessionById(activeSession.id);
+        return;
+      }
+
       if (result.session) {
         setActiveSession(result.session);
+        activeSessionRef.current = result.session;
       }
       if (result.messages) {
         setMessages(result.messages);
       }
+      setStarting(false);
+      setRunning(true);
     } catch (err) {
       if (sessionRequestIdRef.current === requestId) {
-        setRunning(false);
+        clearBusyState();
       }
       setError(err.message);
     }
   }
 
   async function handleCancel() {
-    if (!activeSession?.id) return;
+    cancelRequestedRef.current = true;
+    const sessionId = activeSessionRef.current?.id;
+    if (!sessionId) {
+      clearBusyState();
+      return;
+    }
     try {
-      const { session } = await api.cancelSession(activeSession.id);
-      setActiveSession(session);
-      setRunning(false);
+      await cancelSessionById(sessionId);
     } catch (err) {
       setError(err.message);
     }
@@ -1207,6 +1291,7 @@ export default function App() {
               agent={currentSession?.agentType || agent}
               mode={currentSession?.mode || mode}
               running={running}
+              starting={starting}
               agentChanging={agentChanging}
               modeChanging={modeChanging}
               duelEnabled={setupStatus?.duel?.enabled === true}

@@ -23,6 +23,7 @@ const messagesRoutes = require("./routes/messages.routes");
 const systemRoutes = require("./routes/system.routes");
 const notificationsRoutes = require("./routes/notifications.routes");
 const authRoutes = require("./routes/auth.routes");
+const audioRoutes = require("./routes/audio.routes");
 
 const PORT = Number(process.env.PORT) || 3847;
 const HOST = process.env.HOST || "127.0.0.1";
@@ -102,6 +103,7 @@ function buildApp() {
   app.register(messagesRoutes);
   app.register(systemRoutes);
   app.register(notificationsRoutes);
+  app.register(audioRoutes);
 
   app.register(async (scoped) => {
     scoped.get("/ws", { websocket: true }, (socket) => {

@@ -1,45 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-
-function normalizeTranscript(text) {
-  return text.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function containsWordSequence(words, sequence) {
-  if (sequence.length > words.length) return false;
-  return words.some((_, index) =>
-    sequence.every((word, sequenceIndex) => words[index + sequenceIndex] === word)
-  );
-}
-
-function getTranscriptDelta(transcript, committedTranscript) {
-  const normalizedTranscript = normalizeTranscript(transcript);
-  if (!normalizedTranscript) return "";
-  if (!committedTranscript) return transcript;
-  if (normalizedTranscript === committedTranscript) return "";
-
-  const transcriptWords = transcript.trim().split(/\s+/);
-  const normalizedWords = normalizedTranscript.split(" ");
-  const committedWords = committedTranscript.split(" ");
-  if (containsWordSequence(committedWords, normalizedWords)) return "";
-
-  const maxOverlap = Math.min(normalizedWords.length, committedWords.length);
-
-  for (let overlap = maxOverlap; overlap > 0; overlap--) {
-    const committedSuffix = committedWords.slice(-overlap).join(" ");
-    const transcriptPrefix = normalizedWords.slice(0, overlap).join(" ");
-    if (committedSuffix === transcriptPrefix) {
-      return transcriptWords.slice(overlap).join(" ");
-    }
-  }
-
-  return transcript;
-}
-
-function appendNormalizedTranscript(current, next) {
-  const normalizedNext = normalizeTranscript(next);
-  if (!normalizedNext) return current;
-  return current ? `${current} ${normalizedNext}` : normalizedNext;
-}
+import { api } from "../services/api";
+import {
+  ContinuousAudioCapture,
+  blobToBase64,
+  createTurnDetector,
+  getAudioCaptureUnavailableReason,
+} from "../services/audioCapture";
 
 const VoiceInput = forwardRef(function VoiceInput({
   onTranscript,
@@ -48,125 +14,134 @@ const VoiceInput = forwardRef(function VoiceInput({
   disabled,
   language = "es-US",
 }, ref) {
-  const [supported, setSupported] = useState(true);
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [message, setMessage] = useState("");
-  const recognitionRef = useRef(null);
+  const captureRef = useRef(null);
+  const detectorRef = useRef(null);
+  const stoppingRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
+  const onInterimTranscriptRef = useRef(onInterimTranscript);
   const onListeningChangeRef = useRef(onListeningChange);
-  const stopCallbackRef = useRef(null);
-  const emittedFinalsRef = useRef(new Set());
-  const committedFinalTranscriptRef = useRef("");
+  const languageRef = useRef(language);
   const secureOrigin =
     window.isSecureContext ||
     ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  const unsupportedReason = getAudioCaptureUnavailableReason();
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
   }, [onTranscript]);
 
   useEffect(() => {
+    onInterimTranscriptRef.current = onInterimTranscript;
+  }, [onInterimTranscript]);
+
+  useEffect(() => {
     onListeningChangeRef.current = onListeningChange;
   }, [onListeningChange]);
+
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
 
   useEffect(() => {
     onListeningChangeRef.current?.(listening);
   }, [listening]);
 
   useEffect(() => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    setSupported(!!SpeechRecognition);
+    onInterimTranscriptRef.current?.(transcribing ? "…" : "");
+  }, [transcribing]);
+
+  // Unmounting mid-dictation (e.g. navigating away) must still release the
+  // microphone; a plain unmount gives the turn detector no chance to do it.
+  useEffect(() => () => {
+    detectorRef.current?.stop();
+    captureRef.current?.close();
+  }, []);
+
+  async function transcribeSegment(blob) {
+    setTranscribing(true);
+    setMessage("");
+    try {
+      const audio = await blobToBase64(blob);
+      const { text } = await api.transcribeAudio({ audio, language: languageRef.current });
+      if (text) onTranscriptRef.current?.(text);
+    } catch (error) {
+      setMessage(error.message || "Could not transcribe audio.");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  async function startListening() {
     if (!secureOrigin) {
       setMessage("Voice input requires HTTPS or localhost.");
       return;
     }
-    if (!SpeechRecognition) return;
+    if (unsupportedReason) {
+      setMessage(`${unsupportedReason}.`);
+      return;
+    }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = language;
-    recognition.onresult = (e) => {
-      const nextFinals = [];
-      let interimText = "";
-      let committedTranscript = committedFinalTranscriptRef.current;
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const transcript = e.results[i][0]?.transcript?.trim() || "";
-        if (e.results[i].isFinal) {
-          if (!transcript) continue;
-          const normalizedTranscript = normalizeTranscript(transcript);
-          if (emittedFinalsRef.current.has(normalizedTranscript)) continue;
-          const nextTranscript = getTranscriptDelta(transcript, committedTranscript);
-          if (!nextTranscript) {
-            emittedFinalsRef.current.add(normalizedTranscript);
-            continue;
-          }
-          emittedFinalsRef.current.add(normalizedTranscript);
-          nextFinals.push(nextTranscript);
-          committedTranscript = appendNormalizedTranscript(committedTranscript, nextTranscript);
-        } else {
-          interimText += transcript;
-        }
-      }
-      committedFinalTranscriptRef.current = committedTranscript;
-      if (onInterimTranscript) onInterimTranscript(interimText.trim());
-      if (nextFinals.length > 0) {
-        setMessage("");
-        onTranscriptRef.current(nextFinals.join(" "));
-      }
-    };
-    recognition.onend = () => {
-      emittedFinalsRef.current.clear();
-      committedFinalTranscriptRef.current = "";
+    setMessage("");
+    const capture = new ContinuousAudioCapture();
+    try {
+      await capture.open();
+    } catch (error) {
+      setMessage(
+        error?.name === "NotAllowedError"
+          ? "Microphone permission was blocked."
+          : error.message || "Could not access the microphone."
+      );
+      return;
+    }
+
+    captureRef.current = capture;
+    setListening(true);
+    detectorRef.current = createTurnDetector(capture, {
+      onSegment: transcribeSegment,
+    });
+  }
+
+  async function stopListening(afterStop) {
+    if (stoppingRef.current) {
+      afterStop?.();
+      return;
+    }
+    stoppingRef.current = true;
+    try {
+      await detectorRef.current?.stop();
+      detectorRef.current = null;
+      await captureRef.current?.close();
+      captureRef.current = null;
       setListening(false);
-      if (onInterimTranscript) onInterimTranscript("");
-      stopCallbackRef.current?.();
-      stopCallbackRef.current = null;
-    };
-    recognition.onerror = (event) => {
-      emittedFinalsRef.current.clear();
-      committedFinalTranscriptRef.current = "";
-      setListening(false);
-      if (onInterimTranscript) onInterimTranscript("");
-      stopCallbackRef.current?.();
-      stopCallbackRef.current = null;
-      const messages = {
-        "not-allowed": "Microphone permission was blocked.",
-        "service-not-allowed": "Speech recognition is blocked for this origin.",
-        "audio-capture": "No microphone was detected.",
-        network: "Speech recognition service is unreachable.",
-        "no-speech": "No speech was detected.",
-      };
-      setMessage(messages[event.error] || "Voice input failed.");
-    };
-    recognitionRef.current = recognition;
-    return () => recognition.abort();
-  }, []);
+    } finally {
+      stoppingRef.current = false;
+      afterStop?.();
+    }
+  }
 
   useImperativeHandle(ref, () => ({
     stop(afterStop) {
-      if (!recognitionRef.current || !listening) {
+      if (!listening) {
         afterStop?.();
         return;
       }
-      stopCallbackRef.current = afterStop || null;
-      recognitionRef.current.stop();
+      void stopListening(afterStop);
     },
   }), [listening]);
 
   const unavailableReason = !secureOrigin
     ? "Voice input requires HTTPS or localhost"
-    : !supported
-      ? "Speech recognition is not supported by this browser"
-      : "";
+    : unsupportedReason || "";
   const voiceDisabled = disabled || !!unavailableReason;
 
   return (
     <div className="voice-control">
       {message && <div className="voice-message">{message}</div>}
       {listening && (
-        <div className="voice-wave" aria-hidden="true">
+        <div className={`voice-wave ${transcribing ? "processing" : ""}`} aria-hidden="true">
           <span />
           <span />
           <span />
@@ -178,23 +153,12 @@ const VoiceInput = forwardRef(function VoiceInput({
         type="button"
         className={`composer-icon-btn ${listening ? "active" : ""}`}
         onClick={() => {
-          if (voiceDisabled || !recognitionRef.current) {
+          if (voiceDisabled) {
             if (unavailableReason) setMessage(`${unavailableReason}.`);
             return;
           }
-          if (listening) recognitionRef.current.stop();
-          else {
-            try {
-              setMessage("");
-              emittedFinalsRef.current.clear();
-              committedFinalTranscriptRef.current = "";
-              setListening(true);
-              recognitionRef.current.start();
-            } catch (error) {
-              setListening(false);
-              setMessage(error.message || "Voice input could not start.");
-            }
-          }
+          if (listening) void stopListening();
+          else void startListening();
         }}
         disabled={disabled}
         title={listening ? "Stop voice input" : unavailableReason || "Voice input"}

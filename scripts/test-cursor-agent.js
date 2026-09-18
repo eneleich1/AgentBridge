@@ -40,6 +40,28 @@ function main() {
   );
   assert.equal(trustError.type, "workspace_trust");
 
+  const acpRequired = classifyAgentError(
+    "cursor",
+    "",
+    "Cursor Execute requires ACP so permission requests can be reviewed in AgentBridge."
+  );
+  assert.equal(acpRequired.type, "acp_required");
+
+  const acpError = classifyAgentError(
+    "cursor",
+    "",
+    "Internal error: Invalid input (mcpServers)"
+  );
+  assert.equal(acpError.type, "acp_error");
+  assert.match(acpError.userMessage, /Invalid input \(mcpServers\)/);
+
+  const missingSession = classifyAgentError(
+    "cursor",
+    "",
+    'Invalid params: Session "abc" not found'
+  );
+  assert.equal(missingSession.type, "acp_error");
+
   const replayPrompt = buildSessionReplayPrompt(
     {
       projectId: "project-1",

@@ -7,6 +7,7 @@ coverage/
 # Local runtime state
 data/config/
 data/uploads/
+data/models/
 data/*.sqlite
 data/*.sqlite-*
 data/logs/*

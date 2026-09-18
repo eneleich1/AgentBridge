@@ -10,13 +10,44 @@ const {
   createCapabilities,
 } = require("./types");
 
+function formatRpcErrorData(data) {
+  if (data == null || data === "") return "";
+  if (typeof data === "string") return data;
+  if (Array.isArray(data)) {
+    return data.map((item) => {
+      if (!item || typeof item !== "object") return String(item);
+      const path = Array.isArray(item.path) && item.path.length ? ` (${item.path.join(".")})` : "";
+      return `${item.message || item.code || JSON.stringify(item)}${path}`;
+    }).join("; ");
+  }
+  if (typeof data === "object") return data.details || data.message || JSON.stringify(data);
+  return String(data);
+}
+
 function protocolError(error) {
-  const detail = error?.data?.details || error?.data?.message || "";
+  const detail = formatRpcErrorData(error?.data);
   const message = `${error?.message || "ACP request failed"}${detail ? `: ${detail}` : ""}`;
   const wrapped = new Error(message);
   wrapped.code = "acp_error";
   wrapped.details = error;
   return wrapped;
+}
+
+function buildAcpSessionParams({ projectPath, providerSessionId } = {}) {
+  const params = { cwd: projectPath, mcpServers: [] };
+  if (providerSessionId) params.sessionId = providerSessionId;
+  return params;
+}
+
+function selectPermissionOptionId(options = [], decision, optionId) {
+  const kinds = decision === "approve"
+    ? ["allow_once", "allow-once", "allow_always", "allow-always"]
+    : ["reject_once", "reject-once"];
+  const selected = options.find((option) => {
+    if (optionId && option.optionId !== optionId) return false;
+    return kinds.includes(option.kind) || kinds.includes(option.optionId);
+  });
+  return selected?.optionId || (decision === "approve" ? "allow-once" : "reject-once");
 }
 
 function normalizeAcpUpdate(update) {
@@ -45,6 +76,9 @@ class ACPConnection {
     this.eventQueue = null;
     this.providerCapabilities = {};
     this.stderr = "";
+    this.sessionModes = null;
+    this.liveSessionId = null;
+    this.promptMode = "ask";
     this.capabilities = createCapabilities({
       supportsSessions: true,
       supportsSessionResume: true,
@@ -101,29 +135,39 @@ class ACPConnection {
   }
 
   async createSession({ projectPath }) {
-    const result = await this.request("session/new", {
-      cwd: projectPath,
-      mcpServers: [],
-    });
+    const result = await this.request("session/new", buildAcpSessionParams({ projectPath }));
     this.sessionModes = result?.modes;
-    return { providerSessionId: result?.sessionId || result?.id || null, raw: result };
+    this.liveSessionId = result?.sessionId || result?.id || null;
+    return { providerSessionId: this.liveSessionId, raw: result, resumed: false };
   }
 
   async resumeSession({ providerSessionId, projectPath }) {
     if (!providerSessionId) return this.createSession({ projectPath });
+    if (this.liveSessionId === providerSessionId && this.child?.stdin?.writable) {
+      return { providerSessionId, raw: { reused: true }, resumed: true };
+    }
     const method = this.providerCapabilities.loadSession ? "session/load" : "session/resume";
-    const result = await this.request(method, { sessionId: providerSessionId, cwd: projectPath });
-    this.sessionModes = result?.modes;
-    return { providerSessionId: result?.sessionId || providerSessionId, raw: result };
+    try {
+      const result = await this.request(method, buildAcpSessionParams({ projectPath, providerSessionId }));
+      this.sessionModes = result?.modes || this.sessionModes;
+      this.liveSessionId = result?.sessionId || providerSessionId;
+      return { providerSessionId: this.liveSessionId, raw: result, resumed: true };
+    } catch (error) {
+      const created = await this.createSession({ projectPath });
+      created.resumeError = error.message;
+      return created;
+    }
   }
 
   async *sendPrompt({ providerSessionId, prompt, mode = "ask", attachments = [] }) {
     if (!providerSessionId) throw new Error("ACP session is required before sending a prompt.");
+    this.promptMode = String(mode || "ask").toLowerCase();
     const modes = this.sessionModes?.availableModes || [];
-    const selectedMode = modes.find(item => item.id === mode || (mode === "execute" && item.id === "agent"));
+    const selectedMode = modes.find(item => item.id === mode || (mode === "execute" && item.id === "agent"))
+      || (this.promptMode === "execute" ? { id: "agent" } : null);
     if (selectedMode) {
       await this.request("session/set_mode", { sessionId: providerSessionId, modeId: selectedMode.id });
-    } else if (mode !== "execute") {
+    } else if (this.promptMode !== "execute") {
       throw new Error(`This ACP agent does not advertise a ${mode} mode. Select a connector with read-only support.`);
     }
     const queue = new AsyncEventQueue();
@@ -159,9 +203,7 @@ class ACPConnection {
       throw error;
     }
     if (!["approve", "reject"].includes(decision)) throw new Error("Invalid permission decision.");
-    const kind = decision === "approve" ? "allow_once" : "reject_once";
-    const selected = pending.params?.options?.find(option => option.kind === kind && (!optionId || option.optionId === optionId))?.optionId;
-    if (!selected) throw new Error("The agent did not offer this permission option.");
+    const selected = selectPermissionOptionId(pending.params?.options || [], decision, optionId);
     await this.respond(pending.id, { outcome: { outcome: "selected", optionId: selected } });
     this.pendingPermissions.delete(String(requestId));
   }
@@ -188,6 +230,7 @@ class ACPConnection {
     killProcessTree(this.child, spawn);
     this.failPending(new Error("Agent connection closed."));
     this.child = null;
+    this.liveSessionId = null;
   }
 
   request(method, params) {
@@ -250,6 +293,23 @@ class ACPConnection {
       });
       return;
     }
+    if (message.method === "cursor/create_plan" && Object.hasOwn(message, "id")) {
+      const accepted = this.promptMode === "execute";
+      this.respond(message.id, {
+        outcome: accepted
+          ? { outcome: "accepted" }
+          : { outcome: "rejected", reason: "Plan/Ask mode does not approve implementation." },
+      }).catch(() => {});
+      this.eventQueue?.push({ type: AgentEventType.RAW, raw: { source: "acp-request", message } });
+      return;
+    }
+    if (message.method === "cursor/ask_question" && Object.hasOwn(message, "id")) {
+      this.respond(message.id, {
+        outcome: { outcome: "skipped", reason: "AgentBridge does not present this question UI yet." },
+      }).catch(() => {});
+      this.eventQueue?.push({ type: AgentEventType.RAW, raw: { source: "acp-request", message } });
+      return;
+    }
     // Extension requests are never auto-approved. The UI can expose these as
     // future specialized prompts without leaking raw ACP details.
     if (Object.hasOwn(message, "id")) {
@@ -271,4 +331,10 @@ class ACPConnection {
   }
 }
 
-module.exports = { ACPConnection, normalizeAcpUpdate };
+module.exports = {
+  ACPConnection,
+  normalizeAcpUpdate,
+  protocolError,
+  buildAcpSessionParams,
+  selectPermissionOptionId,
+};

@@ -24,8 +24,15 @@ class AgentSession {
   }
 
   async getConnection() {
-    if (this.connection) return this.connection;
     const config = getAgentConnectionConfig(this.session.agentType);
+    if (this.connection) {
+      const status = await this.connection.getStatus().catch(() => null);
+      const live = Boolean(status && status.status !== "disconnected");
+      const mustUseAcp = config.connectionMode === ConnectionMode.ACP;
+      if (live && (!mustUseAcp || status.protocol === "acp")) return this.connection;
+      await this.connection.closeSession?.().catch(() => {});
+      this.connection = null;
+    }
     try {
       this.connection = createAgentConnection(this.session.agentType);
       await this.connection.connect({ cwd: this.session.projectPath });
@@ -118,16 +125,10 @@ class AgentSession {
     try {
       activeConnection = await this.getConnection();
       let status = await activeConnection.getStatus();
-      const canResume = Boolean(status.capabilities?.supportsSessionResume && this.session.nativeSessionId);
-      const previousMessages = canResume
-        ? []
-        : this.manager.listRecentMessages(sessionId, 8, userMessage.id);
-      const prompt = canResume
-        ? userMessage.content
-        : buildSessionReplayPrompt(this.session, previousMessages, userMessage.content);
+      const canAttemptResume = Boolean(status.capabilities?.supportsSessionResume && this.session.nativeSessionId);
       let providerSession;
       try {
-        providerSession = canResume
+        providerSession = canAttemptResume
           ? await activeConnection.resumeSession({
             sessionId, providerSessionId: this.session.nativeSessionId, projectPath: this.session.projectPath,
           })
@@ -149,6 +150,20 @@ class AgentSession {
           sessionId, projectPath: this.session.projectPath, mode: this.session.mode,
         });
       }
+      if (providerSession?.resumeError) {
+        this.manager.appendSessionLog(
+          sessionId,
+          "system",
+          `ACP session resume failed (${providerSession.resumeError}); opened a new ACP session.\n`
+        );
+      }
+      const usedNativeResume = providerSession?.resumed === true;
+      const previousMessages = usedNativeResume
+        ? []
+        : this.manager.listRecentMessages(sessionId, 8, userMessage.id);
+      const prompt = usedNativeResume
+        ? userMessage.content
+        : buildSessionReplayPrompt(this.session, previousMessages, userMessage.content);
       const providerSessionId = providerSession.providerSessionId || this.session.nativeSessionId || null;
       this.session = this.manager.updateSession(sessionId, {
         nativeSessionId: providerSessionId,
@@ -156,7 +171,7 @@ class AgentSession {
         connectionMode: getAgentConnectionConfig(this.session.agentType).connectionMode,
         protocol: status.protocol,
         transport: status.transport,
-        sessionMode: providerSessionId && status.capabilities?.supportsSessionResume ? "native-resume" : "context-replay",
+        sessionMode: usedNativeResume ? "native-resume" : "context-replay",
         lastActivityAt: new Date().toISOString(),
       }) || this.session;
 

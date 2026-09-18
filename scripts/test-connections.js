@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { ACPConnection, normalizeAcpUpdate } = require("../server/connections/acpConnection");
+const { ACPConnection, normalizeAcpUpdate, protocolError, buildAcpSessionParams, selectPermissionOptionId } = require("../server/connections/acpConnection");
 const { AgentBridgeProtocolConnection } = require("../server/connections/agentBridgeProtocolConnection");
 const { OpenAICompatibleConnection, chatCompletionsUrl } = require("../server/connections/openAICompatibleConnection");
 const { agentConnectionFactory, buildConnectionConfig } = require("../server/connections/connectionFactory");
@@ -39,6 +39,28 @@ async function main() {
   assert.equal(httpStatus.protocol, AgentProtocol.OPENAI_COMPATIBLE);
   assert.equal(httpStatus.capabilities.supportsSessions, false);
   assert.equal(chatCompletionsUrl("http://localhost:1234/v1/"), "http://localhost:1234/v1/chat/completions");
+
+  assert.deepEqual(buildAcpSessionParams({ projectPath: "C:\\proj" }), {
+    cwd: "C:\\proj",
+    mcpServers: [],
+  });
+  assert.deepEqual(buildAcpSessionParams({ projectPath: "C:\\proj", providerSessionId: "sess-1" }), {
+    cwd: "C:\\proj",
+    mcpServers: [],
+    sessionId: "sess-1",
+  });
+  assert.match(
+    protocolError({
+      message: "Internal error",
+      data: [{ expected: "array", code: "invalid_type", path: ["mcpServers"], message: "Invalid input" }],
+    }).message,
+    /Invalid input \(mcpServers\)/
+  );
+  assert.equal(
+    selectPermissionOptionId([{ optionId: "allow-once", kind: "allow_once" }], "approve"),
+    "allow-once"
+  );
+  assert.equal(selectPermissionOptionId([], "approve"), "allow-once");
 
   const local = { id: "local", name: "Local Model", enabled: true };
   const localConnection = agentConnectionFactory.create(local, {

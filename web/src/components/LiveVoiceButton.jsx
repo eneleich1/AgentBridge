@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-
-function getSpeechRecognition() {
-  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
-}
+import { api } from "../services/api";
+import {
+  ContinuousAudioCapture,
+  blobToBase64,
+  createTurnDetector,
+  getAudioCaptureUnavailableReason,
+} from "../services/audioCapture";
 
 function normalizeSpokenText(text) {
   return String(text || "")
@@ -31,6 +34,18 @@ function getVoiceForLanguage(language) {
   );
 }
 
+// While the reply is being read out loud, this is how loud the mic has to
+// get to count as the person cutting in rather than an echo of the speaker.
+const BARGE_IN_LEVEL = 0.05;
+const BARGE_IN_POLL_MS = 120;
+
+/**
+ * The full live-voice loop: listen for a turn (continuous mic capture, cut on
+ * silence), transcribe it locally, send it to the agent, read the reply out
+ * loud, allow interrupting either the reply or the agent, and go back to
+ * listening - all without touching the microphone permission again until the
+ * button is pressed to stop.
+ */
 export default function LiveVoiceButton({
   disabled,
   running,
@@ -39,21 +54,19 @@ export default function LiveVoiceButton({
   onInterrupt,
   language = "es-US",
 }) {
-  const [supported, setSupported] = useState(true);
   const [active, setActive] = useState(false);
   const [phase, setPhase] = useState("idle");
-  const [interim, setInterim] = useState("");
   const [error, setError] = useState("");
 
-  const recognitionRef = useRef(null);
-  const onSubmitRef = useRef(onSubmit);
-  const onInterruptRef = useRef(onInterrupt);
   const activeRef = useRef(false);
   const phaseRef = useRef("idle");
-  const finalTranscriptRef = useRef("");
-  const submitTimerRef = useRef(null);
+  const onSubmitRef = useRef(onSubmit);
+  const onInterruptRef = useRef(onInterrupt);
+  const languageRef = useRef(language);
+  const captureRef = useRef(null);
+  const detectorRef = useRef(null);
+  const bargeInTimerRef = useRef(null);
   const lastReplyIdRef = useRef(null);
-  const speakingRef = useRef(false);
   const waitingForLiveReplyRef = useRef(false);
 
   const secureOrigin =
@@ -62,10 +75,11 @@ export default function LiveVoiceButton({
 
   const unavailableReason = useMemo(() => {
     if (!secureOrigin) return "Live voice requires HTTPS or localhost";
-    if (!supported) return "Live voice is not supported by this browser";
+    const audioReason = getAudioCaptureUnavailableReason();
+    if (audioReason) return audioReason;
     if (!window.speechSynthesis) return "Speech output is not supported by this browser";
     return "";
-  }, [secureOrigin, supported]);
+  }, [secureOrigin]);
 
   useEffect(() => {
     onSubmitRef.current = onSubmit;
@@ -75,42 +89,56 @@ export default function LiveVoiceButton({
     onInterruptRef.current = onInterrupt;
   }, [onInterrupt]);
 
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
   function setLivePhase(nextPhase) {
     phaseRef.current = nextPhase;
     setPhase(nextPhase);
   }
 
-  function clearSubmitTimer() {
-    if (submitTimerRef.current) {
-      window.clearTimeout(submitTimerRef.current);
-      submitTimerRef.current = null;
-    }
-  }
-
-  function stopRecognition() {
-    clearSubmitTimer();
-    try {
-      recognitionRef.current?.stop();
-    } catch {
-      // The browser throws when recognition is already stopped.
-    }
-  }
-
   function cancelSpeech() {
-    speakingRef.current = false;
     window.speechSynthesis?.cancel?.();
+  }
+
+  function stopBargeInWatch() {
+    if (bargeInTimerRef.current) {
+      window.clearInterval(bargeInTimerRef.current);
+      bargeInTimerRef.current = null;
+    }
+  }
+
+  async function teardown() {
+    stopBargeInWatch();
+    const detector = detectorRef.current;
+    detectorRef.current = null;
+    if (detector) await detector.stop().catch(() => {});
+    cancelSpeech();
+    const capture = captureRef.current;
+    captureRef.current = null;
+    if (capture) await capture.close().catch(() => {});
   }
 
   function stopLiveMode() {
     activeRef.current = false;
     waitingForLiveReplyRef.current = false;
     setActive(false);
-    setInterim("");
     setError("");
     setLivePhase("idle");
-    finalTranscriptRef.current = "";
-    stopRecognition();
-    cancelSpeech();
+    void teardown();
+  }
+
+  function watchForBargeIn() {
+    stopBargeInWatch();
+    bargeInTimerRef.current = window.setInterval(() => {
+      if (!activeRef.current || phaseRef.current !== "speaking" || !captureRef.current) return;
+      if (captureRef.current.getLevel() >= BARGE_IN_LEVEL) {
+        stopBargeInWatch();
+        cancelSpeech();
+        void startListening();
+      }
+    }, BARGE_IN_POLL_MS);
   }
 
   function speak(text, { afterSpeech, listenForInterrupt = false } = {}) {
@@ -122,138 +150,76 @@ export default function LiveVoiceButton({
 
     cancelSpeech();
     const utterance = new SpeechSynthesisUtterance(spoken);
-    utterance.lang = language;
+    utterance.lang = languageRef.current;
     utterance.rate = 1.02;
     utterance.pitch = 1;
-    utterance.voice = getVoiceForLanguage(language);
-    speakingRef.current = true;
+    utterance.voice = getVoiceForLanguage(languageRef.current);
     setLivePhase("speaking");
-    utterance.onend = () => {
-      speakingRef.current = false;
-      if (activeRef.current) afterSpeech?.();
+
+    const finish = () => {
+      stopBargeInWatch();
+      // Cancelling speech for a barge-in fires this same event; that path
+      // already starts the next turn itself, so this would otherwise start
+      // it a second time and collide with the segment it just opened.
+      if (activeRef.current && phaseRef.current === "speaking") afterSpeech?.();
     };
-    utterance.onerror = () => {
-      speakingRef.current = false;
-      if (activeRef.current) afterSpeech?.();
-    };
+    utterance.onend = finish;
+    utterance.onerror = finish;
     window.speechSynthesis.speak(utterance);
-    if (listenForInterrupt) {
-      window.setTimeout(() => {
-        if (!activeRef.current || !speakingRef.current || !recognitionRef.current) return;
-        try {
-          recognitionRef.current.start();
-        } catch {
-          // Recognition may already be running.
-        }
-      }, 350);
+
+    if (listenForInterrupt && captureRef.current) {
+      watchForBargeIn();
     }
   }
 
-  async function submitTranscript() {
-    const text = normalizeSpokenText(finalTranscriptRef.current || interim);
-    clearSubmitTimer();
-    finalTranscriptRef.current = "";
-    setInterim("");
-    if (!text) {
-      if (activeRef.current) startListening();
+  async function handleTurn(blob) {
+    setLivePhase("processing");
+
+    let text = "";
+    try {
+      const audio = await blobToBase64(blob);
+      const result = await api.transcribeAudio({ audio, language: languageRef.current });
+      text = normalizeSpokenText(result?.text);
+    } catch (transcribeError) {
+      setError(transcribeError.message || "Could not transcribe your voice.");
+      if (activeRef.current) void startListening();
       return;
     }
 
-    stopRecognition();
+    if (!text) {
+      if (activeRef.current) void startListening();
+      return;
+    }
+
     waitingForLiveReplyRef.current = true;
-    setLivePhase("processing");
     try {
       await onSubmitRef.current?.(text);
     } catch (submitError) {
       waitingForLiveReplyRef.current = false;
       setError(submitError?.message || "Could not send the live prompt.");
-      if (activeRef.current) startListening();
+      if (activeRef.current) void startListening();
     }
   }
 
-  function scheduleSubmit() {
-    clearSubmitTimer();
-    submitTimerRef.current = window.setTimeout(submitTranscript, 850);
-  }
-
-  function startListening() {
-    if (!activeRef.current || !recognitionRef.current) return;
-    finalTranscriptRef.current = "";
-    setInterim("");
+  async function startListening() {
+    if (!activeRef.current || !captureRef.current) return;
+    if (phaseRef.current === "listening") return; // already on a fresh turn
+    setError("");
     setLivePhase("listening");
-    try {
-      recognitionRef.current.start();
-    } catch {
-      // Recognition may already be active after a browser restart event.
-    }
+    detectorRef.current = createTurnDetector(captureRef.current, {
+      speechThreshold: 0.02,
+      silenceMs: 700,
+      minSpeechMs: 200,
+      maxSegmentMs: 20000,
+      onSegment: async (blob) => {
+        // This turn is done; the detector would otherwise reopen the mic for
+        // another one immediately, but the next phase (processing/speaking)
+        // manages listening on its own.
+        detectorRef.current?.haltAutoResume();
+        await handleTurn(blob);
+      },
+    });
   }
-
-  useEffect(() => {
-    const SpeechRecognition = getSpeechRecognition();
-    setSupported(Boolean(SpeechRecognition));
-    if (!secureOrigin || !SpeechRecognition) return undefined;
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = language;
-
-    recognition.onresult = (event) => {
-      if (speakingRef.current) {
-        cancelSpeech();
-      }
-
-      let nextFinal = "";
-      let nextInterim = "";
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const transcript = event.results[index][0]?.transcript || "";
-        if (event.results[index].isFinal) nextFinal += ` ${transcript}`;
-        else nextInterim += ` ${transcript}`;
-      }
-
-      if (nextFinal.trim()) {
-        finalTranscriptRef.current = normalizeSpokenText(
-          `${finalTranscriptRef.current} ${nextFinal}`
-        );
-        setInterim("");
-        scheduleSubmit();
-        return;
-      }
-
-      setInterim(normalizeSpokenText(nextInterim));
-    };
-
-    recognition.onerror = (event) => {
-      const messages = {
-        "not-allowed": "Microphone permission was blocked.",
-        "service-not-allowed": "Speech recognition is blocked for this origin.",
-        "audio-capture": "No microphone was detected.",
-        network: "Speech recognition service is unreachable.",
-        "no-speech": "No speech was detected.",
-      };
-      setError(messages[event.error] || "Live voice failed.");
-      if (activeRef.current && phaseRef.current !== "processing") {
-        window.setTimeout(startListening, 450);
-      }
-    };
-
-    recognition.onend = () => {
-      if (
-        activeRef.current &&
-        phaseRef.current === "listening" &&
-        !waitingForLiveReplyRef.current
-      ) {
-        window.setTimeout(startListening, 250);
-      }
-    };
-
-    recognitionRef.current = recognition;
-    return () => {
-      recognition.abort();
-      clearSubmitTimer();
-      cancelSpeech();
-    };
-  }, []);
 
   useEffect(() => {
     if (!activeRef.current || !liveReply?.id || liveReply.id === lastReplyIdRef.current) return;
@@ -262,14 +228,14 @@ export default function LiveVoiceButton({
 
     const replyText = liveReply.text?.trim();
     if (!replyText) {
-      startListening();
+      void startListening();
       return;
     }
 
     speak(replyText, {
       listenForInterrupt: true,
       afterSpeech: () => {
-        if (activeRef.current) startListening();
+        if (activeRef.current) void startListening();
       },
     });
   }, [liveReply]);
@@ -279,6 +245,10 @@ export default function LiveVoiceButton({
       setLivePhase("processing");
     }
   }, [running]);
+
+  useEffect(() => () => {
+    void teardown();
+  }, []);
 
   async function handleClick() {
     if (disabled || unavailableReason) {
@@ -294,27 +264,39 @@ export default function LiveVoiceButton({
       return;
     }
 
+    setError("");
+    const capture = new ContinuousAudioCapture();
+    try {
+      await capture.open();
+    } catch (openError) {
+      setError(
+        openError?.name === "NotAllowedError"
+          ? "Microphone permission was blocked."
+          : openError.message || "Could not access the microphone."
+      );
+      return;
+    }
+
+    captureRef.current = capture;
     activeRef.current = true;
     setActive(true);
-    setError("");
-    speak("Hola, dime en que te puedo ayudar.", {
-      afterSpeech: startListening,
-    });
+    speak("Hola, dime en que te puedo ayudar.", { afterSpeech: startListening });
   }
 
   async function handleInterrupt() {
+    stopBargeInWatch();
     cancelSpeech();
     if (running || phaseRef.current === "processing") {
       await onInterruptRef.current?.();
     }
     waitingForLiveReplyRef.current = false;
-    if (activeRef.current) startListening();
+    if (activeRef.current) void startListening();
   }
 
   const labelByPhase = {
     idle: "Live voice",
     speaking: "Hablando",
-    listening: interim || "Escuchando",
+    listening: "Escuchando",
     processing: "Procesando",
   };
   const title = active

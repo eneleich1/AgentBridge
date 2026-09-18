@@ -11,7 +11,7 @@
     "dev:remote": "node scripts/dev-remote.js",
     "build:web": "npm run build --prefix web",
     "setup:auth": "node --env-file-if-exists=.env scripts/setup-auth.js",
-    "test": "node scripts/test-run-process.js && node scripts/test-cursor-agent.js && node scripts/test-runtime-config.js && node scripts/test-agent-config-routes.js && node scripts/test-connections.js && node scripts/test-notifications.js && node scripts/test-session-queue.js && node scripts/test-agent-duel.js",
+    "test": "node scripts/test-run-process.js && node scripts/test-cursor-agent.js && node scripts/test-runtime-config.js && node scripts/test-agent-config-routes.js && node scripts/test-connections.js && node scripts/test-notifications.js && node scripts/test-session-queue.js && node scripts/test-agent-duel.js && node scripts/test-audio-transcription.js",
     "audit:public": "node scripts/audit-public-repo.js",
     "test:codex": "node scripts/test-codex.js",
     "test:cursor": "node scripts/test-cursor.js"
@@ -20,8 +20,10 @@
     "@fastify/cors": "^10.0.2",
     "@fastify/static": "^8.0.4",
     "@fastify/websocket": "^11.0.2",
+    "@huggingface/transformers": "^3.8.1",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.2.1",
+    "ffmpeg-static": "^5.2.0",
     "pg": "^8.23.0",
     "uuid": "^11.1.0",
     "web-push": "^3.6.7"

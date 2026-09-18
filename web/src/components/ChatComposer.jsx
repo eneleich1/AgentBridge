@@ -8,6 +8,7 @@ export default function ChatComposer({
   agent,
   mode,
   running,
+  starting = false,
   agentChanging = false,
   modeChanging = false,
   duelEnabled = false,
@@ -30,13 +31,22 @@ export default function ChatComposer({
   const displayedPrompt = voicePreview
     ? `${prompt}${prompt ? " " : ""}${voicePreview}`
     : prompt;
+  const busy = running || starting;
+  const canStop = running && !starting;
+  const canSend = !busy && (prompt.trim() || attachments.length > 0);
+  const hasPromptText = Boolean(displayedPrompt.trim());
+
+  let actionTitle = "Send";
+  if (starting) actionTitle = "Cancel start";
+  else if (canStop) actionTitle = "Stop";
+  else if (voiceListening) actionTitle = "Stop voice input and send";
 
   function handleSend() {
     voiceInputRef.current?.stop(onSend);
   }
 
   function handleKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey && !running) {
+    if (e.key === "Enter" && !e.shiftKey && !busy) {
       e.preventDefault();
       if (prompt.trim() || attachments.length > 0) handleSend();
     }
@@ -184,16 +194,13 @@ export default function ChatComposer({
     }
   }
 
-  const canSend = !running && (prompt.trim() || attachments.length > 0);
-  const hasPromptText = Boolean(displayedPrompt.trim());
-
   return (
     <div className="composer-wrap">
       <div className="composer-toolbar">
         <select
           value={agent}
           onChange={(e) => onAgentChange(e.target.value)}
-          disabled={running || agentChanging || agent === "duel"}
+          disabled={busy || agentChanging || agent === "duel"}
           aria-label="Agent"
         >
           <option value="cursor">Cursor</option>
@@ -208,7 +215,7 @@ export default function ChatComposer({
         <select
           value={mode}
           onChange={(e) => onModeChange(e.target.value)}
-          disabled={running || modeChanging || agent === "duel"}
+          disabled={busy || modeChanging || agent === "duel"}
           aria-label="Agent mode"
         >
           <option value="ask">Ask</option>
@@ -245,7 +252,7 @@ export default function ChatComposer({
             }}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
-            placeholder={running ? "The agent is working. Type your next message here..." : "Message the desktop agent..."}
+            placeholder={busy ? "The agent is working. Type your next message here..." : "Message the desktop agent..."}
           />
         </div>
         <div className="composer-box-actions">
@@ -368,7 +375,7 @@ export default function ChatComposer({
           </div>
           <div className="composer-live-center">
             <LiveVoiceButton
-              disabled={running && !onLiveInterrupt}
+              disabled={busy && !onLiveInterrupt}
               running={running}
               liveReply={liveReply}
               onSubmit={onLiveSubmit}
@@ -377,13 +384,15 @@ export default function ChatComposer({
           </div>
           <button
             type="button"
-            className={`composer-send-btn ${running ? "stop" : ""}`}
-            onClick={running ? onCancel : handleSend}
-            disabled={!running && !canSend}
-            title={running ? "Stop" : voiceListening ? "Stop voice input and send" : "Send"}
-            aria-label={running ? "Stop" : voiceListening ? "Stop voice input and send" : "Send"}
+            className={`composer-send-btn ${starting ? "starting" : ""} ${canStop ? "stop" : ""}`}
+            onClick={canStop || starting ? onCancel : handleSend}
+            disabled={!canStop && !starting && !canSend}
+            title={actionTitle}
+            aria-label={actionTitle}
           >
-            {running ? (
+            {starting ? (
+              <span className="composer-send-spinner" aria-hidden="true" />
+            ) : canStop ? (
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M7 7h10v10H7z" />
               </svg>

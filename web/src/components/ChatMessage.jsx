@@ -191,9 +191,7 @@ function buildFallbackSteps(isRunning) {
   if (!isRunning) return [];
 
   return [
-    { label: "Recibido", text: "Ya recibí tu solicitud." },
-    { label: "Trabajando", text: "Estoy esperando los primeros eventos del agente." },
-    { label: "En curso", text: "La tarea sigue ejecutándose." },
+    { label: "Thinking", text: "Waiting for the first agent events." },
   ];
 }
 
@@ -262,14 +260,58 @@ export function extractDisplayContent(rawText, responseText) {
   return visible.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function getLiveActivity(steps, messageStatus) {
+  if (messageStatus === "queued") {
+    return {
+      label: "Queued",
+      text: "Waiting for capacity before the agent starts.",
+    };
+  }
+
+  const latest = steps[steps.length - 1];
+  if (latest?.label) {
+    return {
+      label: latest.label,
+      text: latest.text || "",
+    };
+  }
+
+  return {
+    label: "Thinking",
+    text: "The agent is working on your request.",
+  };
+}
+
+function ActivityLiveStatus({ label, text }) {
+  return (
+    <div className="activity-live-status" role="status" aria-live="polite">
+      <span className="activity-live-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle className="activity-orbit" cx="12" cy="12" r="9" />
+          <circle className="activity-core" cx="12" cy="12" r="3.25" />
+          <circle className="activity-spark activity-spark-a" cx="12" cy="3" r="1.4" />
+          <circle className="activity-spark activity-spark-b" cx="21" cy="12" r="1.1" />
+          <circle className="activity-spark activity-spark-c" cx="12" cy="21" r="1.1" />
+        </svg>
+      </span>
+      <div className="activity-live-copy">
+        <span className="activity-live-label">{label}</span>
+        {text ? <span className="activity-live-text">{text}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+export { ActivityLiveStatus };
+
 function ThinkingPanel({ steps, openByDefault = false, isRunning = false }) {
   if (!steps.length) return null;
 
   const visibleSteps = isRunning ? steps.slice(-4) : steps.slice(-6);
 
   return (
-    <details className={`thinking-panel ${openByDefault ? "open" : ""}`} open={openByDefault}>
-      <summary>{isRunning ? "Trabajando" : "Actividad"}</summary>
+    <details className="thinking-panel" defaultOpen={openByDefault}>
+      <summary>Activity</summary>
       <div className="thinking-steps">
         {visibleSteps.map((step, index) => (
           <div className="thinking-step" key={`${step.label}-${index}`}>
@@ -403,6 +445,7 @@ export default function ChatMessage({ message, session, running = false, onRepla
   const showRawLogs = rawText && rawText.trim() !== displayContent.trim();
   const activitySteps = extractActivitySteps(rawText, responseText);
   const visibleSteps = activitySteps.length ? activitySteps : buildFallbackSteps(isRunning);
+  const liveActivity = getLiveActivity(visibleSteps, message?.status);
 
   return (
     <div className="chat-message agent">
@@ -420,18 +463,9 @@ export default function ChatMessage({ message, session, running = false, onRepla
         </div>
       )}
 
-      {isRunning && !responseText && (
-        <div className="working-indicator">
-          <span className="spinner" />
-          <span>
-            {message?.status === "queued"
-              ? "En cola. Comenzará automáticamente cuando haya capacidad."
-              : "Trabajando..."}
-          </span>
-        </div>
-      )}
+      {isRunning && <ActivityLiveStatus label={liveActivity.label} text={liveActivity.text} />}
 
-      <ThinkingPanel steps={visibleSteps} openByDefault={isRunning} isRunning={isRunning} />
+      <ThinkingPanel steps={visibleSteps} openByDefault={false} isRunning={isRunning} />
 
       {displayContent && <div className="msg-body agent-bubble">{displayContent}</div>}
 

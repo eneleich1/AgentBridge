@@ -440,6 +440,13 @@ export const api = {
       body: JSON.stringify({ content }),
     }, serverUrl);
   },
+
+  transcribeAudio({ audio, language }, serverUrl = null) {
+    return request("/api/audio/transcriptions", {
+      method: "POST",
+      body: JSON.stringify({ audio, language }),
+    }, serverUrl);
+  },
 };
 
 export function getWebSocketUrl() {

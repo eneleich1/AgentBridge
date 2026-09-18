@@ -30,13 +30,13 @@ class CodexConnection extends ACPConnection {
   async createSession({ projectPath, mode = "ask" }) {
     const result = await this.request("thread/start", { cwd: projectPath, model: this.config.model || null,
       approvalPolicy: "on-request", sandbox: mode === "execute" ? "workspace-write" : "read-only" });
-    return { providerSessionId: result.thread.id };
+    return { providerSessionId: result.thread.id, resumed: false };
   }
 
   async resumeSession({ providerSessionId, projectPath }) {
     const result = await this.request("thread/resume", { threadId: providerSessionId, cwd: projectPath,
       approvalPolicy: "on-request", sandbox: "read-only" });
-    return { providerSessionId: result.thread.id };
+    return { providerSessionId: result.thread.id, resumed: true };
   }
 
   async *sendPrompt({ providerSessionId, projectPath, prompt, mode = "ask", attachments = [] }) {

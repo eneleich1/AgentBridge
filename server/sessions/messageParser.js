@@ -92,6 +92,42 @@ function classifyAgentError(agentType, stdout, stderr) {
     };
   }
 
+  if (combined.includes("requires acp")) {
+    return {
+      type: "acp_required",
+      agentType,
+      userMessage:
+        "Cursor Execute needs a live ACP connection. AgentBridge is using the read-only CLI adapter, which cannot run Execute.",
+      technicalMessage: combined.trim(),
+      fixSteps: [
+        "In Settings, set Cursor connection method to ACP / stdio or Auto.",
+        "Retry the message so AgentBridge can open a new ACP session.",
+      ],
+    };
+  }
+
+  if (
+    combined.includes("internal error") ||
+    combined.includes("acp request failed") ||
+    combined.includes("acp process exited") ||
+    combined.includes("mcpServers") ||
+    combined.includes("invalid params") ||
+    (combined.includes("session") && combined.includes("not found"))
+  ) {
+    const original = stripAnsi(`${stdout || ""}\n${stderr || ""}`).trim().split("\n").filter(Boolean)[0]
+      || "ACP request failed";
+    return {
+      type: "acp_error",
+      agentType,
+      userMessage: `Cursor ACP failed: ${original}`,
+      technicalMessage: combined.trim(),
+      fixSteps: [
+        "Retry the message. AgentBridge will open a new ACP session if resume fails.",
+        "If it keeps failing, restart AgentBridge and confirm `agent acp` works on the desktop.",
+      ],
+    };
+  }
+
   if (
     combined.includes("'agent' is not recognized") ||
     combined.includes("'codex' is not recognized") ||

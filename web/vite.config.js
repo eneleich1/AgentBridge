@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    allowedHosts: [".trycloudflare.com"],
   },
   preview: {
     port: 4173,

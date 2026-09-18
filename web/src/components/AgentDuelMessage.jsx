@@ -1,4 +1,4 @@
-import { extractDisplayContent } from "./ChatMessage";
+import { ActivityLiveStatus, extractDisplayContent } from "./ChatMessage";
 
 const DUEL_OUTPUT_PREFIX = "[[agentbridge:duel-output]]";
 const DUEL_RESULT_PREFIX = "[[agentbridge:duel-result]]";
@@ -63,11 +63,11 @@ function ContestantCard({ contestant, definition, winner, busy, onSelectWinner }
         <span className={`status-chip ${contestant.status}`}>{contestant.status}</span>
       </header>
       <div className="duel-card-body">
-        {!displayContent && !contestant.error && ["queued", "running"].includes(contestant.status) && (
-          <div className="working-indicator">
-            <span className="spinner" />
-            <span>{contestant.status === "queued" ? "Waiting to start..." : "Building proposal..."}</span>
-          </div>
+        {["queued", "running"].includes(contestant.status) && (
+          <ActivityLiveStatus
+            label={contestant.status === "queued" ? "Queued" : "Thinking"}
+            text={contestant.status === "queued" ? "Waiting to start..." : "Building proposal..."}
+          />
         )}
         {displayContent && <div className="duel-answer">{displayContent}</div>}
         {contestant.error && <div className="duel-error">{contestant.error}</div>}
