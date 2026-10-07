@@ -94,10 +94,10 @@ async function main() {
   assert.equal(mappedSession.transport, "stdio");
 
   let permissionDecision = null;
-  sessionManager.registerPermissionRequest("queued-session", "request-1", {
+  const publicPermissionId = sessionManager.registerPermissionRequest("queued-session", "request-1", {
     respondToPermission: async (value) => { permissionDecision = value; },
   });
-  await sessionManager.respondToPermission("queued-session", "request-1", { decision: "approve" });
+  await sessionManager.respondToPermission("queued-session", publicPermissionId, { decision: "approve" });
   assert.deepEqual(permissionDecision, { requestId: "request-1", decision: "approve", optionId: undefined });
   await assert.rejects(
     sessionManager.setSessionAgent("queued-session", "duel"),
@@ -188,11 +188,63 @@ async function main() {
   assert.equal(sessionManager.getSessionById("interrupted-session").status, "failed");
   assert.equal(sessionManager.getMessageById(interruptedAgent.id).status, "failed");
 
+  // Reopen a persisted chat with a fresh connector, as after a backend restart.
+  const { AgentSession } = require("../server/sessions/agentSession");
+  const { AgentEventType } = require("../server/connections/types");
+  for (const scenario of ["missing", "resumed", "protocol-changed", "no-provider-id"]) {
+    const saved = sessionManager.updateSession("legacy-session", {
+      agentType: "codex", mode: "execute", status: "ready",
+      nativeSessionId: "saved-thread", providerSessionId: "saved-thread",
+      protocol: scenario === "protocol-changed" ? "acp" : "codex_app_server",
+    });
+    sessionManager.createMessage({ sessionId: saved.id, role: "agent", content: "Saved conversation context" });
+    const user = sessionManager.createMessage({ sessionId: saved.id, role: "user", content: "Current instruction" });
+    let resumeCalls = 0;
+    let createCalls = 0;
+    let sent;
+    const runtime = new AgentSession(sessionManager, saved);
+    runtime.getConnection = async () => ({
+      getStatus: async () => ({ protocol: "codex_app_server", transport: "stdio", capabilities: { supportsSessionResume: true } }),
+      resumeSession: async (params) => {
+        resumeCalls++;
+        assert.equal(params.mode, "execute");
+        assert.equal(params.providerSessionId, "saved-thread");
+        if (scenario !== "resumed") throw new Error("Thread no longer available");
+        return { providerSessionId: "saved-thread", resumed: true };
+      },
+      createSession: async () => {
+        createCalls++;
+        return { providerSessionId: scenario === "no-provider-id" ? null : "replacement-thread", resumed: false };
+      },
+      sendPrompt: async function* (params) {
+        sent = params;
+        yield { type: AgentEventType.TEXT_DELTA, text: "Recovered answer" };
+        yield { type: AgentEventType.COMPLETED, result: { exitCode: 0, providerSessionId: params.providerSessionId } };
+      },
+    });
+    const response = await runtime.sendMessage(user);
+    assert.equal(response.status, "completed");
+    assert.equal(sessionManager.getSessionById(saved.id).status, "ready");
+    assert.equal(resumeCalls, scenario === "protocol-changed" ? 0 : 1);
+    assert.equal(createCalls, scenario === "resumed" ? 0 : 1);
+    assert.match(response.raw, /\[\[agentbridge:progress\]\]/);
+    assert.match(sent.prompt, /Provide brief progress updates/);
+    if (scenario === "resumed") assert.ok(sent.prompt.startsWith(user.content));
+    else {
+      assert.match(sent.prompt, /Saved conversation context/);
+      assert.match(sent.prompt, /Current instruction/);
+      assert.equal(sent.providerSessionId, scenario === "no-provider-id" ? null : "replacement-thread");
+    }
+    assert.equal(sessionManager.getSessionById(saved.id).nativeSessionId, sent.providerSessionId);
+  }
+
+  await sessionManager.finalizeSessionLog("queued-session", { status: "cancelled", exitCode: null });
   console.log("session queue tests passed");
 }
 
 main()
   .finally(() => {
+    require("../server/services/notificationService").close();
     sessionManager.db?.close();
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   })

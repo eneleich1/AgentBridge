@@ -219,6 +219,17 @@ export const api = {
     return request("/api/auth/session");
   },
 
+  getAuthSettings() {
+    return request("/api/auth/settings");
+  },
+
+  updateAuthSettings(idleTimeoutMinutes) {
+    return request("/api/auth/settings", {
+      method: "PUT",
+      body: JSON.stringify({ idleTimeoutMinutes }),
+    });
+  },
+
   async login(username, password, totpToken) {
     const data = await request("/api/auth/login", {
       method: "POST",

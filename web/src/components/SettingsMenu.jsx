@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ConfirmDialog from "./ConfirmDialog";
 import PushNotificationSettings from "./PushNotificationSettings";
+import { api } from "../services/api";
 
 function statusText(info) {
   if (!info) return "Not checked";
@@ -102,6 +103,12 @@ export default function SettingsMenu({
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [updatingDuel, setUpdatingDuel] = useState(false);
   const [duelError, setDuelError] = useState("");
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState("");
+  const [savedIdleTimeoutMinutes, setSavedIdleTimeoutMinutes] = useState(null);
+  const [authSettingsLoading, setAuthSettingsLoading] = useState(true);
+  const [authSettingsSaving, setAuthSettingsSaving] = useState(false);
+  const [authSettingsError, setAuthSettingsError] = useState("");
+  const [authSettingsNotice, setAuthSettingsNotice] = useState("");
   const selectedAgentName = defaultAgent === "codex" ? "Codex CLI" : defaultAgent === "local" ? "Local Model" : "Cursor Agent";
   const selectedAgentStatus = setupStatus?.[defaultAgent];
   const selectedAgentConfigured = selectedAgentStatus?.configured === true;
@@ -111,6 +118,23 @@ export default function SettingsMenu({
     setDeleteNotice("");
     setConfirmDeleteOpen(false);
   }, [defaultAgent]);
+
+  useEffect(() => {
+    let active = true;
+    api.getAuthSettings()
+      .then(({ idleTimeoutMinutes: minutes }) => {
+        if (!active) return;
+        setIdleTimeoutMinutes(String(minutes));
+        setSavedIdleTimeoutMinutes(minutes);
+      })
+      .catch((error) => {
+        if (active) setAuthSettingsError(String(error?.message || error));
+      })
+      .finally(() => {
+        if (active) setAuthSettingsLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   const popoverStyle = useMemo(() => {
     if (!anchorRect || typeof window === "undefined") return undefined;
@@ -158,6 +182,28 @@ export default function SettingsMenu({
     }
   }
 
+  async function handleSaveIdleTimeout(event) {
+    event.preventDefault();
+    const minutes = Number(idleTimeoutMinutes);
+    if (!Number.isInteger(minutes) || minutes < 5 || minutes > 1440) {
+      setAuthSettingsError("Enter a whole number from 5 to 1440 minutes.");
+      return;
+    }
+    setAuthSettingsSaving(true);
+    setAuthSettingsError("");
+    setAuthSettingsNotice("");
+    try {
+      const settings = await api.updateAuthSettings(minutes);
+      setIdleTimeoutMinutes(String(settings.idleTimeoutMinutes));
+      setSavedIdleTimeoutMinutes(settings.idleTimeoutMinutes);
+      setAuthSettingsNotice("Session timeout saved.");
+    } catch (error) {
+      setAuthSettingsError(String(error?.message || error));
+    } finally {
+      setAuthSettingsSaving(false);
+    }
+  }
+
   return (
     <>
       <div className="settings-popover" role="dialog" aria-label="Settings" style={popoverStyle}>
@@ -193,6 +239,36 @@ export default function SettingsMenu({
             <span>Configure Backend</span>
             <small>{setupStatus?.setupComplete ? "Connected" : "Needs setup"}</small>
           </button>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-label">Security</div>
+          <form className="settings-idle-form" onSubmit={handleSaveIdleTimeout}>
+            <label htmlFor="settings-idle-timeout">Sign out after inactivity</label>
+            <div className="settings-idle-controls">
+              <input
+                id="settings-idle-timeout"
+                type="number"
+                min="5"
+                max="1440"
+                step="1"
+                value={idleTimeoutMinutes}
+                onChange={(event) => {
+                  setIdleTimeoutMinutes(event.target.value);
+                  setAuthSettingsNotice("");
+                }}
+                disabled={authSettingsLoading || authSettingsSaving}
+                aria-describedby="settings-idle-help"
+              />
+              <span>minutes</span>
+              <button type="submit" disabled={authSettingsLoading || authSettingsSaving || Number(idleTimeoutMinutes) === savedIdleTimeoutMinutes}>
+                {authSettingsSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+            <small id="settings-idle-help">Allowed range: 5–1440 minutes.</small>
+            {authSettingsError && <div className="alert error" role="alert">{authSettingsError}</div>}
+            {authSettingsNotice && <div className="success-box" role="status">{authSettingsNotice}</div>}
+          </form>
         </div>
 
         <div className="settings-section">

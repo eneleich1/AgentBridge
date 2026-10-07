@@ -37,7 +37,7 @@ class AgentBridgeProtocolConnection {
   }
 
   async resumeSession({ providerSessionId, sessionId }) {
-    return { providerSessionId: providerSessionId || null, sessionId };
+    return { providerSessionId: providerSessionId || null, sessionId, resumed: Boolean(providerSessionId) };
   }
 
   async *sendPrompt({ projectPath, prompt, mode, attachments, providerSessionId, signal }) {

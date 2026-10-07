@@ -22,6 +22,18 @@ async function authRoutes(fastify) {
     return { ok: true };
   });
 
+  fastify.get("/api/auth/settings", async () => {
+    return authService.getAuthSettings();
+  });
+
+  fastify.put("/api/auth/settings", async (request, reply) => {
+    try {
+      return authService.updateAuthSettings(request.body || {});
+    } catch (error) {
+      return reply.code(400).send({ error: error.message });
+    }
+  });
+
   fastify.post("/api/auth/logout", async (request) => {
     const header = request.headers.authorization || "";
     const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;

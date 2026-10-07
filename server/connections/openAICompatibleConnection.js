@@ -19,7 +19,7 @@ class OpenAICompatibleConnection {
     this.protocol = protocol;
     this.capabilities = createCapabilities({
       supportsSessions: false,
-      supportsStreaming: false,
+      supportsStreaming: true,
       supportsCancellation: true,
       supportsAskMode: true,
       supportsPlanMode: true,
@@ -52,19 +52,54 @@ class OpenAICompatibleConnection {
       signal,
       body: JSON.stringify({
         model: this.config.model || "default",
-        stream: false,
+        stream: true,
         messages: [{ role: "user", content: prompt }],
       }),
     });
-    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
       const error = new Error(payload?.error?.message || payload?.error || `HTTP connector failed (${response.status}).`);
       error.code = "http_agent_error";
       throw error;
     }
+    if (response.headers.get('content-type')?.includes('text/event-stream')) {
+      // SSE frames may span transport chunks. Only surface public content;
+      // reasoning_content and other private provider fields are ignored.
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const readFrame = (frame) => {
+        const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+        if (!data || data === '[DONE]') return [];
+        const payload = JSON.parse(data);
+        if (payload.error) throw new Error(payload.error.message || 'HTTP model stream failed.');
+        const events = [];
+        const text = payload.choices?.[0]?.delta?.content;
+        if (typeof text === 'string' && text) events.push({ type: AgentEventType.TEXT_DELTA, text });
+        if (payload.usage) events.push({ type: AgentEventType.USAGE_UPDATED, usage: payload.usage });
+        return events;
+      };
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        // Normalize only after joining chunks, including a split CRLF pair.
+        buffer = buffer.replace(/\r\n/g, '\n');
+        let boundary;
+        while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          for (const event of readFrame(frame)) yield event;
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) for (const event of readFrame(buffer)) yield event;
+      yield { type: AgentEventType.COMPLETED, result: { exitCode: 0, cancelled: false, providerSessionId: null } };
+      return;
+    }
+    // Some compatible servers return a JSON response even when streaming
+    // was requested; keep those endpoints usable.
+    const payload = await response.json();
     const text = payload?.choices?.[0]?.message?.content || payload?.message?.content || "";
-    if (text) yield { type: AgentEventType.TEXT_DELTA, text, raw: { source: "openai-compatible", payload } };
-    if (payload?.usage) yield { type: AgentEventType.USAGE_UPDATED, usage: payload.usage, raw: { source: "openai-compatible", payload } };
+    if (text) yield { type: AgentEventType.TEXT_DELTA, text };
+    if (payload?.usage) yield { type: AgentEventType.USAGE_UPDATED, usage: payload.usage };
     yield { type: AgentEventType.COMPLETED, result: { exitCode: 0, cancelled: false, providerSessionId: null } };
   }
 

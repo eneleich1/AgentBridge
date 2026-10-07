@@ -1571,6 +1571,63 @@ body {
   margin: 0 0 0.35rem 0.35rem;
 }
 
+.settings-idle-form {
+  padding: 0.6rem;
+  border: 1px solid #3f3f44;
+  border-radius: 10px;
+  background: #242426;
+}
+
+.settings-idle-form label {
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.settings-idle-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.settings-idle-controls input {
+  width: 5rem;
+  min-width: 0;
+  padding: 0.4rem;
+  border: 1px solid #55555d;
+  border-radius: 6px;
+  background: #34343a;
+  color: #f3f4f6;
+  font: inherit;
+}
+
+.settings-idle-controls span,
+.settings-idle-form small {
+  color: #a7a7ad;
+  font-size: 0.72rem;
+}
+
+.settings-idle-controls button {
+  margin-left: auto;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid #565861;
+  border-radius: 6px;
+  background: #3d3f49;
+  color: #f3f4f6;
+  cursor: pointer;
+}
+
+.settings-idle-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.settings-idle-form small {
+  display: block;
+  margin-top: 0.4rem;
+}
+
 .settings-choice-row {
   display: inline-grid;
   grid-template-columns: 1fr 1fr;
@@ -2925,3 +2982,42 @@ body {
     max-height: 112px;
   }
 }
+
+/* Persistent account navigation and floating prompt index. */
+.sidebar-account { position: relative; flex-shrink: 0; padding: 10px; border-top: 1px solid #303036; }
+.sidebar-account .account-menu-trigger { display: flex; align-items: center; gap: 10px; width: 100%; height: auto; padding: 10px; border: 0; border-radius: 12px; text-align: left; }
+.account-avatar { display: grid; place-items: center; width: 34px; height: 34px; flex-shrink: 0; border-radius: 11px; background: linear-gradient(135deg, #4f46e5, #0284c7); color: white; }
+.account-avatar svg { width: 21px; height: 21px; }
+.account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.account-name small { display: block; margin-top: 6px; color: #a1a1aa; font-size: 11px; font-weight: 400; }
+.account-popover { position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; padding: 6px; background: #29292d; border: 1px solid #44444b; border-radius: 14px; box-shadow: 0 12px 35px #0006; z-index: 50; }
+.account-popover button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px; background: transparent; border: 0; border-radius: 8px; color: #e4e4e7; text-align: left; cursor: pointer; }
+.account-popover button:hover, .account-popover button:focus-visible { background: #3b3b42; }
+.account-popover button span { width: 20px; text-align: center; font-size: 19px; }
+.settings-popover { max-height: calc(100dvh - 80px); overflow-y: auto; }
+.activity-elapsed { margin-left: 8px; color: #a1a1aa; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.chat-turn { scroll-margin-top: 18px; }
+.chat-turn:focus { outline: 2px solid #6366f1; outline-offset: 4px; border-radius: 12px; }
+.prompt-history, .prompt-history-launcher { position: fixed; right: 18px; bottom: max(18px, env(safe-area-inset-bottom)); z-index: 30; color: #e4e4e7; background: #242429; border: 1px solid #44444b; border-radius: 14px; box-shadow: 0 12px 36px #0005; }
+.prompt-history { width: 250px; }
+.prompt-history-header { display: flex; align-items: center; gap: 4px; padding: 8px; }
+.prompt-history button { color: inherit; cursor: pointer; background: transparent; border: 0; border-radius: 7px; }
+.prompt-history-header button { min-width: 28px; min-height: 30px; }
+.prompt-history button:hover, .prompt-history button:focus-visible { background: #3a3a42; }
+.prompt-history-title { flex: 1; text-align: left; font-weight: 600; }
+.prompt-history-title span { color: #a1a1aa; margin-left: 5px; font-size: 11px; }
+.prompt-history-list { list-style: none; margin: 0; padding: 0 8px 8px; max-height: min(230px, 32dvh); overflow-y: auto; }
+.prompt-history-list button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px 8px; text-align: left; }
+.prompt-history-list button > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.prompt-number { color: #a5b4fc; font-size: 11px; flex-shrink: 0; }
+.prompt-history-preview { position: absolute; right: calc(100% + 10px); bottom: 0; width: min(440px, calc(100vw - 300px)); max-height: min(440px, 65dvh); overflow: auto; padding: 18px; background: #29292f; border: 1px solid #55555d; border-radius: 14px; box-shadow: 0 12px 36px #0006; font-size: 13px; }
+.prompt-history-preview div { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 12px; line-height: 1.6; }
+.prompt-history-preview small { display: block; margin-top: 12px; color: #a1a1aa; }
+.prompt-history-launcher { width: 40px; height: 40px; cursor: pointer; font-size: 23px; }
+@media (max-width: 768px) {
+  .prompt-history, .prompt-history-launcher { right: 10px; bottom: calc(var(--mobile-chat-bottom-space) + 10px); }
+  .prompt-history { width: min(230px, calc(100vw - 24px)); }
+  .prompt-history-preview { right: 0; bottom: calc(100% + 8px); width: min(440px, calc(100vw - 24px)); max-height: 35dvh; }
+}
+@media (prefers-reduced-motion: reduce) { .chat-feed { scroll-behavior: auto; } }
+.prompt-history-preview { right: calc(100% - 1px); }

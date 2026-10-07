@@ -5,6 +5,7 @@ const {
 } = require("../agents/agentFactory");
 const { ConnectionMode, AgentEventType } = require("../connections/types");
 const { TerminalBuffer } = require("./terminalBuffer");
+const { describeActivity, activityMarker } = require("./activity");
 const {
   normalizeChunk,
   classifyAgentError,
@@ -68,6 +69,8 @@ class AgentSession {
     let outputFlushTimer = null;
     let result = null;
     let activeConnection = null;
+    let activityRaw = "";
+    let lastActivity = "";
 
     const flushMessage = () => {
       if (messageFlushTimer) clearTimeout(messageFlushTimer);
@@ -118,21 +121,42 @@ class AgentSession {
       scheduleMessageFlush();
       scheduleOutputFlush();
     };
+    const reportActivity = (activity) => {
+      const marker = activityMarker(activity);
+      if (marker === lastActivity) return;
+      lastActivity = marker;
+      activityRaw += marker;
+      pendingRaw += marker;
+      pendingStderr += marker;
+      scheduleMessageFlush();
+      scheduleOutputFlush();
+    };
 
     this.session = this.manager.markSessionRunning(sessionId) || this.session;
     this.manager.emitSessionEvent("message_added", sessionId, { message: agentMessage }, this.session);
+    reportActivity({ label: "Connecting", text: "Preparing the agent connection and conversation context." });
 
     try {
       activeConnection = await this.getConnection();
       let status = await activeConnection.getStatus();
-      const canAttemptResume = Boolean(status.capabilities?.supportsSessionResume && this.session.nativeSessionId);
+      const savedProviderSessionId = this.session.providerSessionId || this.session.nativeSessionId;
+      const canAttemptResume = Boolean(status.capabilities?.supportsSessionResume && savedProviderSessionId
+        && (!this.session.protocol || this.session.protocol === status.protocol));
       let providerSession;
       try {
-        providerSession = canAttemptResume
-          ? await activeConnection.resumeSession({
-            sessionId, providerSessionId: this.session.nativeSessionId, projectPath: this.session.projectPath,
-          })
-          : await activeConnection.createSession({ sessionId, projectPath: this.session.projectPath, mode: this.session.mode });
+        if (canAttemptResume) {
+          try {
+            providerSession = await activeConnection.resumeSession({
+              sessionId, providerSessionId: savedProviderSessionId, projectPath: this.session.projectPath, mode: this.session.mode,
+            });
+          } catch (error) {
+            if (this.abortController.signal.aborted) throw error;
+            this.manager.appendSessionLog(sessionId, "system", `Session resume failed (${error.message}); opening a new session with saved chat context.\n`);
+          }
+        }
+        if (!providerSession) {
+          providerSession = await activeConnection.createSession({ sessionId, projectPath: this.session.projectPath, mode: this.session.mode });
+        }
       } catch (error) {
         const config = getAgentConnectionConfig(this.session.agentType);
         if (config.connectionMode !== ConnectionMode.AUTO || status.protocol !== "acp") throw error;
@@ -154,17 +178,18 @@ class AgentSession {
         this.manager.appendSessionLog(
           sessionId,
           "system",
-          `ACP session resume failed (${providerSession.resumeError}); opened a new ACP session.\n`
+          `Session resume failed (${providerSession.resumeError}); opened a new session.\n`
         );
       }
       const usedNativeResume = providerSession?.resumed === true;
       const previousMessages = usedNativeResume
         ? []
         : this.manager.listRecentMessages(sessionId, 8, userMessage.id);
-      const prompt = usedNativeResume
+      const requestPrompt = usedNativeResume
         ? userMessage.content
         : buildSessionReplayPrompt(this.session, previousMessages, userMessage.content);
-      const providerSessionId = providerSession.providerSessionId || this.session.nativeSessionId || null;
+      const prompt = `${requestPrompt}\n\nProvide brief progress updates in the user's language at meaningful milestones while working. Describe actions and findings, without private reasoning or repetitive updates. Then provide your final answer.`;
+      const providerSessionId = providerSession.providerSessionId || null;
       this.session = this.manager.updateSession(sessionId, {
         nativeSessionId: providerSessionId,
         providerSessionId,
@@ -175,6 +200,7 @@ class AgentSession {
         lastActivityAt: new Date().toISOString(),
       }) || this.session;
 
+      reportActivity({ label: "Working", text: "Request sent. Waiting for the agent's next update." });
       for await (const event of activeConnection.sendPrompt({
         projectPath: this.session.projectPath,
         prompt,
@@ -183,6 +209,8 @@ class AgentSession {
         providerSessionId,
         signal: this.abortController.signal,
       })) {
+        const activity = describeActivity(event);
+        if (activity) reportActivity(activity);
         if (event.type === AgentEventType.TEXT_DELTA) appendText(event.text, "stdout");
         else if (event.type === AgentEventType.PERMISSION_REQUESTED) {
           const requestId = this.manager.registerPermissionRequest(sessionId, event.requestId, activeConnection, event.permission);
@@ -243,7 +271,7 @@ class AgentSession {
       const finalStatus = result.cancelled ? "cancelled" : result.exitCode === 0 ? "completed" : "failed";
       const updatedMessage = this.manager.finishAgentMessage(agentMessage.id, {
         content: duelResult || stdout || (stderr ? error?.userMessage || stderr : ""),
-        raw: duelResult || `${rawStdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`,
+        raw: duelResult || `${activityRaw}${rawStdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`,
         status: finalStatus,
         error,
       });

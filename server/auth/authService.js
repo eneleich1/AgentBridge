@@ -1,13 +1,43 @@
 const crypto = require("crypto");
 const db = require("./db");
+const { readJsonConfig, writeJsonConfig } = require("../utils/runtimeConfig");
 
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const AUTH_SETTINGS_FILE = "auth-settings.json";
+const DEFAULT_IDLE_TIMEOUT_MINUTES = 30;
 const TOTP_STEP_SECONDS = 30;
 const TOTP_DIGITS = 6;
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ENCRYPTION_SALT = "agentbridge-auth-salt";
 
-const sessions = new Map(); // token -> expiresAt (ms epoch)
+const sessions = new Map(); // token -> last activity time (ms epoch)
+
+function normalizeIdleTimeoutMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isInteger(minutes) || minutes < 5 || minutes > 1440) {
+    throw new Error("Idle timeout must be a whole number between 5 and 1440 minutes.");
+  }
+  return minutes;
+}
+
+function getAuthSettings() {
+  const settings = readJsonConfig(AUTH_SETTINGS_FILE, {
+    idleTimeoutMinutes: DEFAULT_IDLE_TIMEOUT_MINUTES,
+  });
+  return {
+    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
+      settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES
+    ),
+  };
+}
+
+function updateAuthSettings(nextSettings = {}) {
+  const settings = {
+    ...getAuthSettings(),
+    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(nextSettings.idleTimeoutMinutes),
+  };
+  writeJsonConfig(AUTH_SETTINGS_FILE, settings);
+  return settings;
+}
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
@@ -169,7 +199,7 @@ async function login({ username, password, totpToken }) {
     return { ok: false, error: "Invalid authentication code" };
   }
   const token = crypto.randomBytes(32).toString("base64url");
-  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  sessions.set(token, Date.now());
   return { ok: true, token };
 }
 
@@ -192,14 +222,16 @@ async function changePassword({ currentPassword, totpToken, newPassword }) {
   return { ok: true };
 }
 
-function validateSession(token) {
+function validateSession(token, { touch = true } = {}) {
   if (!token) return false;
-  const expiresAt = sessions.get(token);
-  if (!expiresAt) return false;
-  if (Date.now() > expiresAt) {
+  const lastActivityAt = sessions.get(token);
+  if (!lastActivityAt) return false;
+  const idleTimeoutMs = getAuthSettings().idleTimeoutMinutes * 60 * 1000;
+  if (Date.now() - lastActivityAt > idleTimeoutMs) {
     sessions.delete(token);
     return false;
   }
+  if (touch) sessions.set(token, Date.now());
   return true;
 }
 
@@ -216,6 +248,8 @@ module.exports = {
   login,
   validateSession,
   revokeSession,
+  getAuthSettings,
+  updateAuthSettings,
   generateTotpSecret,
   totpUri,
   verifyTotpToken,

@@ -11,7 +11,7 @@ import AgentSetupWizard from "./components/AgentSetupWizard";
 import ProjectSetupWizard from "./components/ProjectSetupWizard";
 import BackendSetupWizard from "./components/BackendSetupWizard";
 import SystemMetricsPanel from "./components/SystemMetricsPanel";
-import AccountMenu from "./components/AccountMenu";
+import PromptHistory from "./components/PromptHistory";
 import ConfirmDialog from "./components/ConfirmDialog";
 
 function formatRefreshError(err) {
@@ -176,6 +176,8 @@ export default function App() {
   const pendingOutputRef = useRef(new Map());
   const outputFlushTimerRef = useRef(null);
   const chatEndRef = useRef(null);
+  const chatFeedRef = useRef(null);
+  const followOutputRef = useRef(true);
   const activeSessionRef = useRef(null);
   const cancelRequestedRef = useRef(false);
 
@@ -579,8 +581,18 @@ export default function App() {
   }, [backendUrl, selectedProjectId, refresh]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ block: "end" });
+    if (followOutputRef.current) chatEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages, isDraft]);
+
+  useEffect(() => { followOutputRef.current = true; }, [selectedSessionId, isDraft]);
+
+  function jumpToPrompt(messageId) {
+    const element = document.getElementById(`message-${messageId}`);
+    if (!element) return;
+    followOutputRef.current = false;
+    element.scrollIntoView({ block: "start", behavior: "instant" });
+    element.focus({ preventScroll: true });
+  }
 
   function handleResizeStart(e) {
     e.preventDefault();
@@ -1196,7 +1208,6 @@ export default function App() {
       <main className="main-panel">
         {!isMobile && (
           <div className="system-metrics-dock">
-            <AccountMenu />
             <SystemMetricsPanel
               metrics={systemMetrics}
               visible={systemMetricsVisible}
@@ -1245,7 +1256,10 @@ export default function App() {
 
           {error && <div className="alert error banner">{error}</div>}
 
-          <div className={`chat-feed ${isMobile ? "mobile" : ""}`}>
+          <div ref={chatFeedRef} className={`chat-feed ${isMobile ? "mobile" : ""}`} onScroll={(event) => {
+            const feed = event.currentTarget;
+            followOutputRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+          }}>
             {isDraft && (
               <div className="empty-chat">
                 <div className="empty-icon">*</div>
@@ -1261,7 +1275,7 @@ export default function App() {
             {!isDraft && (
               <div className="chat-thread">
                 {messages.map((message) => (
-                  <div className="chat-turn" key={message.id}>
+                  <div className="chat-turn" key={message.id} id={`message-${message.id}`} tabIndex={-1}>
                     {currentSession?.agentType === "duel" && message.role === "agent" ? (
                       <AgentDuelMessage
                         message={message}
@@ -1308,6 +1322,7 @@ export default function App() {
           </div>
         </div>
       </main>
+      <PromptHistory messages={messages} sessionId={selectedSessionId} onSelect={jumpToPrompt} />
 
       {settingsOpen && (
         <SettingsMenu

@@ -107,7 +107,9 @@ function describeCommand(command) {
 
 function uniqueSteps(steps) {
   return steps.filter((step, index, array) => {
-    return index === array.findIndex((item) => item.label === step.label && item.text === step.text);
+    // Repeated actions later in the run must still become the current status.
+    const previous = array[index - 1];
+    return !previous || previous.label !== step.label || previous.text !== step.text;
   });
 }
 
@@ -283,6 +285,12 @@ function getLiveActivity(steps, messageStatus) {
 }
 
 function ActivityLiveStatus({ label, text }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   return (
     <div className="activity-live-status" role="status" aria-live="polite">
       <span className="activity-live-icon" aria-hidden="true">
@@ -295,7 +303,7 @@ function ActivityLiveStatus({ label, text }) {
         </svg>
       </span>
       <div className="activity-live-copy">
-        <span className="activity-live-label">{label}</span>
+        <span className="activity-live-label">{label} <span className="activity-elapsed">{elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`}</span></span>
         {text ? <span className="activity-live-text">{text}</span> : null}
       </div>
     </div>
@@ -446,12 +454,13 @@ export default function ChatMessage({ message, session, running = false, onRepla
   const activitySteps = extractActivitySteps(rawText, responseText);
   const visibleSteps = activitySteps.length ? activitySteps : buildFallbackSteps(isRunning);
   const liveActivity = getLiveActivity(visibleSteps, message?.status);
+  const agentName = { codex: 'Codex', cursor: 'Cursor', local: 'Local Model' }[session?.agentType] || session?.agentType || 'Agent';
 
   return (
     <div className="chat-message agent">
       <div className="msg-label">
-        <span className="agent-avatar">{session?.agentType === "codex" ? "Cx" : "Cu"}</span>
-        {session?.agentType === "codex" ? "Codex" : "Cursor"} Agent
+        <span className="agent-avatar">{{ codex: 'Cx', cursor: 'Cu', local: 'LM' }[session?.agentType] || 'AI'}</span>
+        {agentName}
         {message?.status && <span className={`status-chip ${message.status}`}>{message.status}</span>}
       </div>
 

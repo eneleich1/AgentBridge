@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../services/api";
 
-export default function AccountMenu() {
+export default function AccountMenu({ onOpenSettings }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [account, setAccount] = useState(null);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -13,9 +15,21 @@ export default function AccountMenu() {
   const [status, setStatus] = useState("");
 
   useEffect(() => {
-    if (!open) return;
     api.getAccount().then(setAccount).catch(() => setAccount(null));
   }, [open]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event) => {
+      if (event.type === 'keydown' ? event.key === 'Escape' : !menuRef.current?.contains(event.target)) setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [menuOpen]);
 
   function resetForm() {
     setCurrentPassword("");
@@ -58,15 +72,25 @@ export default function AccountMenu() {
 
   return (
     <>
+      <div className="sidebar-account" ref={menuRef}>
       <button
         type="button"
         className="account-menu-trigger"
-        onClick={() => setOpen(true)}
+        onClick={() => setMenuOpen(value => !value)}
+        aria-expanded={menuOpen}
         aria-label="Account"
         title="Account"
       >
-        {initial}
+        <span className="account-avatar">{account?.username ? initial : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="12" cy="8" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></svg>}</span>
+        <span className="account-name">{account?.username || "Account"}<small>Personal workspace</small></span>
+        <span aria-hidden="true">⌃</span>
       </button>
+      {menuOpen && <div className="account-popover" aria-label="Account options">
+        <button type="button" onClick={() => { setMenuOpen(false); onOpenSettings?.(); }}><span aria-hidden="true">⚙</span> Settings</button>
+        <button type="button" onClick={() => { setMenuOpen(false); setOpen(true); }}><span aria-hidden="true">♙</span> Account &amp; password</button>
+        <button type="button" onClick={() => { setMenuOpen(false); handleLogout().catch(err => { setError(err.message); setOpen(true); }); }}><span aria-hidden="true">↪</span> Log out</button>
+      </div>}
+      </div>
 
       {open && (
         <div

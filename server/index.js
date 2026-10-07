@@ -73,7 +73,9 @@ function buildApp() {
     const presentedToken = isWebSocketRequest ? bearer || queryToken : bearer;
 
     if (await authService.isAccountConfigured()) {
-      if (presentedToken && authService.validateSession(presentedToken)) return;
+      // Background telemetry and reconnects must not count as user activity.
+      const touch = pathname !== "/api/system-metrics" && !isWebSocketRequest;
+      if (presentedToken && authService.validateSession(presentedToken, { touch })) return;
       return reply.code(401).send({ error: "Unauthorized" });
     }
 

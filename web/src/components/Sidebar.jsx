@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import ContextMenu from "./ContextMenu";
 import SystemMetricsPanel from "./SystemMetricsPanel";
+import AccountMenu from "./AccountMenu";
 
 function statusLabel(status, setupStatus) {
   if (!setupStatus) return "Needs Setup";
@@ -180,23 +181,6 @@ export default function Sidebar({
             >
               Connections
             </button>
-            <button
-              type="button"
-              className="nav-item"
-              onClick={(event) => {
-                onOpenSettings(event.currentTarget.getBoundingClientRect());
-                closeDrawer();
-              }}
-            >
-              Settings
-            </button>
-            <button
-              type="button"
-              className="nav-item muted"
-              disabled
-            >
-              History (Coming soon)
-            </button>
             {!isMobile && (
               <button type="button" className="nav-item" onClick={onRefresh}>
                 Refresh
@@ -327,6 +311,7 @@ export default function Sidebar({
         )}
 
         {!isMobile && <div className="resize-handle" onMouseDown={onResizeStart} />}
+        <AccountMenu onOpenSettings={() => { onOpenSettings(null); closeDrawer(); }} />
 
         {menu && (
           <ContextMenu

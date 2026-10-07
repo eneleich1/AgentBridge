@@ -10,13 +10,14 @@ const { safeLaunch } = require("../agents/safeLaunch");
 // turn/start acknowledges immediately; turn/completed ends the stream.
 class CodexConnection extends ACPConnection {
   async connect({ cwd } = {}) {
-    if (this.child && !this.child.killed) return this.getStatus();
+    if (this.child && !this.child.killed && this.child.exitCode == null && this.child.signalCode == null) return this.getStatus();
     const launch = safeLaunch(resolveCodexCommand(), ["app-server"]);
     this.child = spawn(launch.command, launch.args, { cwd, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    this.child.on("error", error => this.failPending(error));
-    this.child.on("exit", code => this.failPending(new Error(`Codex disconnected (${code}).`)));
-    this.child.stderr.on("data", chunk => { this.stderr = (this.stderr + chunk).slice(-16000); });
-    readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity }).on("line", line => this.handleLine(line));
+    const child = this.child;
+    child.on("error", error => { if (this.child === child) this.failPending(error); });
+    child.on("exit", code => { if (this.child === child) this.failPending(new Error(`Codex disconnected (${code}).`)); });
+    this.child.stderr.on("data", chunk => { if (this.child === child) this.stderr = (this.stderr + chunk).slice(-16000); });
+    readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity }).on("line", line => { if (this.child === child) this.handleLine(line); });
     await this.request("initialize", { clientInfo: { name: "agentbridge", version: "0.1.0" }, capabilities: {} });
     this.child.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
     this.capabilities = createCapabilities({ supportsSessions: true, supportsSessionResume: true, supportsPermissions: true, supportsToolEvents: true });
@@ -33,9 +34,10 @@ class CodexConnection extends ACPConnection {
     return { providerSessionId: result.thread.id, resumed: false };
   }
 
-  async resumeSession({ providerSessionId, projectPath }) {
+  async resumeSession({ providerSessionId, projectPath, mode = "ask" }) {
     const result = await this.request("thread/resume", { threadId: providerSessionId, cwd: projectPath,
-      approvalPolicy: "on-request", sandbox: "read-only" });
+      model: this.config.model || null,
+      approvalPolicy: "on-request", sandbox: mode === "execute" ? "workspace-write" : "read-only" });
     return { providerSessionId: result.thread.id, resumed: true };
   }
 
@@ -89,6 +91,15 @@ class CodexConnection extends ACPConnection {
       this.eventQueue?.push({ type: "permission_resolved", requestId: String(p.requestId) });
     }
     if (message.method === "item/started") this.items?.set(p.item.id, p.item);
+    if (message.method === "item/started" || message.method === "item/completed") {
+      const item = p.item || {};
+      const started = message.method === "item/started";
+      const type = item.type === "commandExecution" ? (started ? AgentEventType.COMMAND_STARTED : AgentEventType.COMMAND_COMPLETED)
+        : item.type === "fileChange" ? (started ? AgentEventType.TOOL_STARTED : AgentEventType.FILE_CHANGED)
+        : /ToolCall$/.test(item.type || "") ? (started ? AgentEventType.TOOL_STARTED : AgentEventType.TOOL_COMPLETED)
+        : item.type === "reasoning" && started ? AgentEventType.REASONING_STATUS : null;
+      if (type) this.eventQueue?.push({ type });
+    }
     if (message.method === "item/agentMessage/delta") this.eventQueue?.push({ type: AgentEventType.TEXT_DELTA, text: p.delta || "" });
     if (message.method === "turn/completed") {
       this.eventQueue?.push(p.turn?.error ? { type: AgentEventType.ERROR, error: new Error(p.turn.error.message) } : {

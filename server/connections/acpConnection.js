@@ -56,6 +56,9 @@ function normalizeAcpUpdate(update) {
   if (kind === "agent_message_chunk") {
     return { type: AgentEventType.TEXT_DELTA, text: content.text || update.text || "" };
   }
+  if (kind === "agent_thought_chunk" || kind === "plan") {
+    return { type: AgentEventType.REASONING_STATUS };
+  }
   if (/tool.*start|tool_call$/.test(kind)) return { type: AgentEventType.TOOL_STARTED, tool: update };
   if (/tool.*(complete|update|result)/.test(kind)) return { type: AgentEventType.TOOL_COMPLETED, tool: update };
   if (/command.*start|terminal.*start/.test(kind)) return { type: AgentEventType.COMMAND_STARTED, command: update };
@@ -91,7 +94,7 @@ class ACPConnection {
   }
 
   async connect({ cwd } = {}) {
-    if (this.child && !this.child.killed) return this.getStatus();
+    if (this.child && !this.child.killed && this.child.exitCode == null && this.child.signalCode == null) return this.getStatus();
     const executable = this.config.executablePath || "agent";
     const args = Array.isArray(this.config.arguments) && this.config.arguments.length
       ? this.config.arguments
@@ -102,15 +105,17 @@ class ACPConnection {
     const launch = safeLaunch(executable, args);
     this.child = spawn(launch.command, launch.args, { cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
 
-    this.child.on("error", (error) => this.failPending(error));
-    this.child.on("exit", (code) => this.failPending(new Error(`ACP process exited (${code ?? "unknown"}).`)));
+    const child = this.child;
+    child.on("error", (error) => { if (this.child === child) this.failPending(error); });
+    child.on("exit", (code) => { if (this.child === child) this.failPending(new Error(`ACP process exited (${code ?? "unknown"}).`)); });
     this.child.stderr.on("data", (chunk) => {
+      if (this.child !== child) return;
       const text = chunk.toString();
       this.stderr += text;
       this.eventQueue?.push({ type: AgentEventType.RAW, stream: "stderr", text, raw: { source: "acp-stderr", text } });
     });
     const lines = readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity });
-    lines.on("line", (line) => this.handleLine(line));
+    lines.on("line", (line) => { if (this.child === child) this.handleLine(line); });
 
     const initialized = await this.request("initialize", {
       protocolVersion: 1,
@@ -215,7 +220,7 @@ class ACPConnection {
 
   async getStatus() {
     return {
-      status: this.child && !this.child.killed ? "connected" : "disconnected",
+      status: this.child && !this.child.killed && this.child.exitCode == null && this.child.signalCode == null ? "connected" : "disconnected",
       protocol: AgentProtocol.ACP,
       transport: AgentTransport.STDIO,
       capabilities: this.capabilities,
@@ -225,12 +230,13 @@ class ACPConnection {
   }
 
   async closeSession() {
-    if (!this.child || this.child.killed) return;
-    this.child.stdin.end();
-    killProcessTree(this.child, spawn);
-    this.failPending(new Error("Agent connection closed."));
+    const child = this.child;
     this.child = null;
     this.liveSessionId = null;
+    this.failPending(new Error("Agent connection closed."));
+    if (!child || child.killed || child.exitCode != null || child.signalCode != null) return;
+    child.stdin.end();
+    killProcessTree(child, spawn);
   }
 
   request(method, params) {
