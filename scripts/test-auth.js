@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const Fastify = require("fastify");
+const { spawnSync } = require("node:child_process");
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agentbridge-auth-"));
 process.env.AGENTBRIDGE_DATA_DIR = temporaryRoot;
@@ -21,6 +22,7 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
   },
 } };
 const auth = require("../server/auth/authService");
+const sessionStore = require("../server/auth/sessionStore");
 const { writeJsonConfig } = require("../server/utils/runtimeConfig");
 const app = Fastify();
 app.register(require("../server/routes/auth.routes"));
@@ -50,6 +52,46 @@ async function main() {
   assert.equal(response.statusCode, 200);
   const token = response.json().token;
   assert.equal(auth.validateSession(token), true);
+  // A separate server process recognizes the same session after a reload/restart.
+  const freshProcess = spawnSync(process.execPath, ["-e", `
+    const fs = require('node:fs');
+    const auth = require('./server/auth/authService');
+    const token = fs.readFileSync(0, 'utf8');
+    process.stdout.write(String(auth.validateSession(token, { touch: false })));
+    require('./server/auth/sessionStore').close();
+    require('./server/auth/db').pool.end();
+  `], { cwd: path.join(__dirname, ".."), input: token, encoding: "utf8", timeout: 10000 });
+  assert.equal(freshProcess.status, 0, freshProcess.stderr);
+  assert.equal(freshProcess.stdout, "true");
+  // The stored credential is a hash, not a usable bearer token.
+  const Database = require("better-sqlite3");
+  const storedDb = new Database(path.join(temporaryRoot, "auth-sessions.sqlite"));
+  const storedSession = storedDb.prepare("SELECT * FROM auth_sessions").get();
+  assert.equal(storedSession.token_hash, crypto.createHash("sha256").update(token).digest("hex"));
+  storedDb.close();
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    auth.updateAuthSettings({ idleTimeoutMinutes: 980 });
+    sessionStore.set(token, clock);
+    clock += 10 * 60 * 1000;
+    assert.equal(auth.validateSession(token, { touch: false }), true);
+    clock += 969 * 60 * 1000;
+    assert.equal(auth.validateSession(token, { touch: false }), true);
+    clock += 2 * 60 * 1000;
+    assert.equal(auth.validateSession(token, { touch: false }), false);
+    // User requests extend the deadline; telemetry does not.
+    sessionStore.set(token, clock);
+    clock += 979 * 60 * 1000;
+    assert.equal(auth.validateSession(token), true);
+    clock += 10 * 60 * 1000;
+    assert.equal(auth.validateSession(token, { touch: false }), true);
+  } finally {
+    Date.now = realNow;
+    sessionStore.set(token, realNow());
+    auth.updateAuthSettings({ idleTimeoutMinutes: 960 });
+  }
   assert.equal((await auth.changePassword({ currentPassword: "wrong", newPassword: "new-password" })).ok, false);
   response = await app.inject({ method: "POST", url: "/api/auth/change-password", payload: { currentPassword: "test-password", newPassword: "new-password" } });
   assert.equal(response.statusCode, 200);
@@ -75,11 +117,13 @@ async function main() {
   assert.equal((await auth.login({ username: "tester", password: "another-password" })).ok, true);
   assert.equal(account.totp_secret_encrypted, encryptedSecret);
   auth.revokeSession(token);
+  sessionStore.close();
   assert.equal(auth.validateSession(token), false);
   console.log("auth tests passed");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   await app.close();
+  sessionStore.close();
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 });

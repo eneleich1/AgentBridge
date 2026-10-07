@@ -174,6 +174,7 @@ async function request(path, options = {}, baseUrl = null) {
 
   if (!response.ok) {
     const err = new Error(data.error || `Request failed (${response.status})`);
+    err.status = response.status;
     err.code = data.code;
     err.setup = data.setup;
     err.agent = data.agent;

@@ -9,7 +9,7 @@ const TOTP_DIGITS = 6;
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const ENCRYPTION_SALT = "agentbridge-auth-salt";
 
-const sessions = new Map(); // token -> last activity time (ms epoch)
+const sessions = require("./sessionStore");
 
 function normalizeIdleTimeoutMinutes(value) {
   const minutes = Number(value);
@@ -179,6 +179,7 @@ async function setupAccount({ username, email = "", password }) {
        updated_at = now()`,
     [username, email, passwordHash, encrypted]
   );
+  sessions.clear();
   return { username, email, totpSecret, otpauthUrl: totpUri(totpSecret, username) };
 }
 

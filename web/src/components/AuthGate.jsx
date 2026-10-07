@@ -2,30 +2,17 @@ import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import LoginScreen from "./LoginScreen";
 import App from "../App";
+import { resolveAuthStatus } from "../services/authStatus";
 
 export default function AuthGate() {
-  const [status, setStatus] = useState("checking"); // checking | login | app
+  const [status, setStatus] = useState("checking"); // checking | login | app | error
 
   async function checkAuth() {
+    setStatus("checking");
     try {
-      const { configured } = await api.getAuthStatus();
-      if (!configured) {
-        setStatus("app");
-        return;
-      }
-      if (api.getToken()) {
-        try {
-          await api.checkSession();
-          setStatus("app");
-          return;
-        } catch {
-          // stored token is invalid/expired, fall through to login
-        }
-      }
-      setStatus("login");
+      setStatus(await resolveAuthStatus(api));
     } catch {
-      // Backend unreachable: let App render its own connection error UI.
-      setStatus("app");
+      setStatus("error");
     }
   }
 
@@ -39,6 +26,15 @@ export default function AuthGate() {
   }, []);
 
   if (status === "checking") return null;
+  if (status === "error") return (
+    <div className="wizard-backdrop" role="alert">
+      <div className="agent-wizard">
+        <h2>Could not verify your session</h2>
+        <p>Unable to connect to the server. Your sign-in has been kept. Please retry.</p>
+        <button className="btn primary" onClick={checkAuth}>Retry</button>
+      </div>
+    </div>
+  );
   if (status === "login") return <LoginScreen onLoggedIn={() => setStatus("app")} />;
   return <App />;
 }
