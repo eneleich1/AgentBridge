@@ -2,13 +2,16 @@ const authService = require("../auth/authService");
 
 async function authRoutes(fastify) {
   fastify.get("/api/auth/status", async () => {
-    return { configured: await authService.isAccountConfigured() };
+    return {
+      configured: await authService.isAccountConfigured(),
+      authenticationCodeEnabled: authService.getAuthSettings().authenticationCodeEnabled,
+    };
   });
 
   fastify.post("/api/auth/login", async (request, reply) => {
     const { username, password, totpToken } = request.body || {};
-    if (!username || !password || !totpToken) {
-      return reply.code(400).send({ error: "username, password, and totpToken are required" });
+    if (!username || !password) {
+      return reply.code(400).send({ error: "username and password are required" });
     }
 
     const result = await authService.login({ username, password, totpToken });
@@ -47,8 +50,8 @@ async function authRoutes(fastify) {
 
   fastify.post("/api/auth/change-password", async (request, reply) => {
     const { currentPassword, totpToken, newPassword } = request.body || {};
-    if (!currentPassword || !totpToken || !newPassword) {
-      return reply.code(400).send({ error: "currentPassword, totpToken, and newPassword are required" });
+    if (!currentPassword || !newPassword) {
+      return reply.code(400).send({ error: "currentPassword and newPassword are required" });
     }
     const result = await authService.changePassword({ currentPassword, totpToken, newPassword });
     if (!result.ok) {

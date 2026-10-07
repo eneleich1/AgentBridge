@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../services/api";
 
 export default function LoginScreen({ onLoggedIn }) {
@@ -7,12 +7,27 @@ export default function LoginScreen({ onLoggedIn }) {
   const [totpToken, setTotpToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [authenticationCodeEnabled, setAuthenticationCodeEnabled] = useState(null);
+
+  async function refreshAuthStatus() {
+    try {
+      const status = await api.getAuthStatus();
+      setAuthenticationCodeEnabled(status.authenticationCodeEnabled === true);
+      setError("");
+    } catch (err) {
+      setError(err?.message || "Could not load sign-in settings");
+    }
+  }
+
+  useEffect(() => { refreshAuthStatus(); }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setLoading(true);
     setError("");
     try {
+      const status = await api.getAuthStatus();
+      setAuthenticationCodeEnabled(status.authenticationCodeEnabled === true);
       await api.login(username.trim(), password, totpToken.trim());
       onLoggedIn();
     } catch (err) {
@@ -51,7 +66,7 @@ export default function LoginScreen({ onLoggedIn }) {
               autoComplete="current-password"
             />
           </label>
-          <label>
+          {authenticationCodeEnabled && <label>
             Authenticator code
             <input
               value={totpToken}
@@ -61,15 +76,18 @@ export default function LoginScreen({ onLoggedIn }) {
               placeholder="6-digit code"
               autoComplete="one-time-code"
             />
-          </label>
+          </label>}
 
           {error && <div className="alert error">{error}</div>}
+          {authenticationCodeEnabled === null && error && (
+            <button type="button" className="btn" onClick={refreshAuthStatus}>Retry</button>
+          )}
 
           <div className="agent-wizard-actions">
             <button
               type="submit"
               className="btn primary"
-              disabled={loading || !username || !password || !totpToken}
+              disabled={loading || authenticationCodeEnabled === null || !username || !password || (authenticationCodeEnabled && !totpToken)}
             >
               {loading ? "Signing in..." : "Log in"}
             </button>

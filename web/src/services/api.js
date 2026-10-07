@@ -223,10 +223,10 @@ export const api = {
     return request("/api/auth/settings");
   },
 
-  updateAuthSettings(idleTimeoutMinutes) {
+  updateAuthSettings(settings) {
     return request("/api/auth/settings", {
       method: "PUT",
-      body: JSON.stringify({ idleTimeoutMinutes }),
+      body: JSON.stringify(settings),
     });
   },
 

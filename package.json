@@ -11,7 +11,7 @@
     "dev:remote": "node scripts/dev-remote.js",
     "build:web": "npm run build --prefix web",
     "setup:auth": "node --env-file-if-exists=.env scripts/setup-auth.js",
-    "test": "node scripts/test-run-process.js && node scripts/test-cursor-agent.js && node scripts/test-runtime-config.js && node scripts/test-agent-config-routes.js && node scripts/test-connections.js && node scripts/test-notifications.js && node scripts/test-session-queue.js && node scripts/test-agent-duel.js && node scripts/test-audio-transcription.js",
+    "test": "node scripts/test-auth.js && node scripts/test-run-process.js && node scripts/test-cursor-agent.js && node scripts/test-runtime-config.js && node scripts/test-agent-config-routes.js && node scripts/test-connections.js && node scripts/test-notifications.js && node scripts/test-session-queue.js && node scripts/test-agent-duel.js && node scripts/test-audio-transcription.js",
     "audit:public": "node scripts/audit-public-repo.js",
     "test:codex": "node scripts/test-codex.js",
     "test:cursor": "node scripts/test-cursor.js"

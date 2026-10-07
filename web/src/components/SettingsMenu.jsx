@@ -105,6 +105,7 @@ export default function SettingsMenu({
   const [duelError, setDuelError] = useState("");
   const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState("");
   const [savedIdleTimeoutMinutes, setSavedIdleTimeoutMinutes] = useState(null);
+  const [authenticationCodeEnabled, setAuthenticationCodeEnabled] = useState(false);
   const [authSettingsLoading, setAuthSettingsLoading] = useState(true);
   const [authSettingsSaving, setAuthSettingsSaving] = useState(false);
   const [authSettingsError, setAuthSettingsError] = useState("");
@@ -122,10 +123,11 @@ export default function SettingsMenu({
   useEffect(() => {
     let active = true;
     api.getAuthSettings()
-      .then(({ idleTimeoutMinutes: minutes }) => {
+      .then(({ idleTimeoutMinutes: minutes, authenticationCodeEnabled: enabled }) => {
         if (!active) return;
         setIdleTimeoutMinutes(String(minutes));
         setSavedIdleTimeoutMinutes(minutes);
+        setAuthenticationCodeEnabled(enabled === true);
       })
       .catch((error) => {
         if (active) setAuthSettingsError(String(error?.message || error));
@@ -193,10 +195,26 @@ export default function SettingsMenu({
     setAuthSettingsError("");
     setAuthSettingsNotice("");
     try {
-      const settings = await api.updateAuthSettings(minutes);
+      const settings = await api.updateAuthSettings({ idleTimeoutMinutes: minutes });
       setIdleTimeoutMinutes(String(settings.idleTimeoutMinutes));
       setSavedIdleTimeoutMinutes(settings.idleTimeoutMinutes);
       setAuthSettingsNotice("Session timeout saved.");
+    } catch (error) {
+      setAuthSettingsError(String(error?.message || error));
+    } finally {
+      setAuthSettingsSaving(false);
+    }
+  }
+
+  async function handleAuthenticationCodeToggle() {
+    if (authSettingsLoading || authSettingsSaving) return;
+    setAuthSettingsSaving(true);
+    setAuthSettingsError("");
+    setAuthSettingsNotice("");
+    try {
+      const settings = await api.updateAuthSettings({ authenticationCodeEnabled: !authenticationCodeEnabled });
+      setAuthenticationCodeEnabled(settings.authenticationCodeEnabled);
+      setAuthSettingsNotice(settings.authenticationCodeEnabled ? "Authenticator code enabled." : "Authenticator code disabled.");
     } catch (error) {
       setAuthSettingsError(String(error?.message || error));
     } finally {
@@ -243,6 +261,21 @@ export default function SettingsMenu({
 
         <div className="settings-section">
           <div className="settings-label">Security</div>
+          <div className="settings-feature-row">
+            <div className="settings-feature-copy">
+              <strong>Authenticator code</strong>
+              <small>Require your authenticator code when signing in or changing your password. Turn it back on to use your existing authenticator.</small>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="Authenticator code"
+              aria-checked={authenticationCodeEnabled}
+              className={`settings-switch ${authenticationCodeEnabled ? "active" : ""}`}
+              disabled={authSettingsLoading || authSettingsSaving}
+              onClick={handleAuthenticationCodeToggle}
+            ><span /></button>
+          </div>
           <form className="settings-idle-form" onSubmit={handleSaveIdleTimeout}>
             <label htmlFor="settings-idle-timeout">Sign out after inactivity</label>
             <div className="settings-idle-controls">

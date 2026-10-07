@@ -135,7 +135,7 @@ export default function AccountMenu({ onOpenSettings }) {
                   autoComplete="current-password"
                 />
               </label>
-              <label>
+              {account?.authenticationCodeEnabled && <label>
                 Authenticator code
                 <input
                   value={totpToken}
@@ -145,7 +145,7 @@ export default function AccountMenu({ onOpenSettings }) {
                   placeholder="6-digit code"
                   autoComplete="one-time-code"
                 />
-              </label>
+              </label>}
               <label>
                 New password
                 <input
@@ -175,7 +175,7 @@ export default function AccountMenu({ onOpenSettings }) {
                 <button
                   type="submit"
                   className="btn primary"
-                  disabled={loading || !currentPassword || !totpToken || !newPassword}
+                  disabled={loading || !account || !currentPassword || (account.authenticationCodeEnabled && !totpToken) || !newPassword}
                 >
                   {loading ? "Saving..." : "Update password"}
                 </button>

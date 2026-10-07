@@ -22,8 +22,10 @@ function normalizeIdleTimeoutMinutes(value) {
 function getAuthSettings() {
   const settings = readJsonConfig(AUTH_SETTINGS_FILE, {
     idleTimeoutMinutes: DEFAULT_IDLE_TIMEOUT_MINUTES,
+    authenticationCodeEnabled: false,
   });
   return {
+    authenticationCodeEnabled: settings.authenticationCodeEnabled === true,
     idleTimeoutMinutes: normalizeIdleTimeoutMinutes(
       settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES
     ),
@@ -31,9 +33,16 @@ function getAuthSettings() {
 }
 
 function updateAuthSettings(nextSettings = {}) {
+  if (Object.hasOwn(nextSettings, "authenticationCodeEnabled") &&
+      typeof nextSettings.authenticationCodeEnabled !== "boolean") {
+    throw new Error("authenticationCodeEnabled must be a boolean.");
+  }
   const settings = {
     ...getAuthSettings(),
-    idleTimeoutMinutes: normalizeIdleTimeoutMinutes(nextSettings.idleTimeoutMinutes),
+    ...(Object.hasOwn(nextSettings, "idleTimeoutMinutes")
+      ? { idleTimeoutMinutes: normalizeIdleTimeoutMinutes(nextSettings.idleTimeoutMinutes) } : {}),
+    ...(Object.hasOwn(nextSettings, "authenticationCodeEnabled")
+      ? { authenticationCodeEnabled: nextSettings.authenticationCodeEnabled } : {}),
   };
   writeJsonConfig(AUTH_SETTINGS_FILE, settings);
   return settings;
@@ -176,7 +185,7 @@ async function setupAccount({ username, email = "", password }) {
 async function getAccountInfo() {
   const row = await loadAccountRow();
   if (!row) return null;
-  return { username: row.username, email: row.email || "" };
+  return { username: row.username, email: row.email || "", authenticationCodeEnabled: getAuthSettings().authenticationCodeEnabled };
 }
 
 async function updateEmail(email) {
@@ -194,8 +203,8 @@ async function login({ username, password, totpToken }) {
   if (username !== row.username || !verifyPassword(password, row.password_hash)) {
     return { ok: false, error: "Invalid username or password" };
   }
-  const totpSecret = decryptSecret(row.totp_secret_encrypted);
-  if (!verifyTotpToken(totpSecret, totpToken)) {
+  if (getAuthSettings().authenticationCodeEnabled &&
+      !verifyTotpToken(decryptSecret(row.totp_secret_encrypted), totpToken)) {
     return { ok: false, error: "Invalid authentication code" };
   }
   const token = crypto.randomBytes(32).toString("base64url");
@@ -209,8 +218,8 @@ async function changePassword({ currentPassword, totpToken, newPassword }) {
   if (!verifyPassword(currentPassword, row.password_hash)) {
     return { ok: false, error: "Current password is incorrect." };
   }
-  const totpSecret = decryptSecret(row.totp_secret_encrypted);
-  if (!verifyTotpToken(totpSecret, totpToken)) {
+  if (getAuthSettings().authenticationCodeEnabled &&
+      !verifyTotpToken(decryptSecret(row.totp_secret_encrypted), totpToken)) {
     return { ok: false, error: "Invalid authentication code." };
   }
   if (!newPassword || newPassword.length < 8) {
